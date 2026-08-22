@@ -8,10 +8,6 @@ function hypot(v: PlanVertex): number {
   return Math.hypot(v.x, v.y)
 }
 
-function scale(v: PlanVertex, s: number): PlanVertex {
-  return { x: v.x * s, y: v.y * s }
-}
-
 /** Unit outward normal for a CCW plan polygon edge a→b. */
 export function outwardNormal(a: PlanVertex, b: PlanVertex): PlanVertex {
   const d = sub(b, a)
@@ -117,8 +113,4 @@ export function sweepMiteredProfile(inner: PlanVertex[], profile: ProfilePoint[]
 
   if (signedVolume(triangles) < 0) flip(triangles)
   return { triangles }
-}
-
-export function scalePlan(v: PlanVertex, s: number): PlanVertex {
-  return scale(v, s)
 }

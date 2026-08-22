@@ -11,6 +11,7 @@ export class FrameViewer {
   private frameMesh: THREE.Mesh | null = null
   private readonly resizeObserver: ResizeObserver
   private readonly host: HTMLElement
+  private fitted = false
   private raf = 0
 
   constructor(host: HTMLElement) {
@@ -90,7 +91,10 @@ export class FrameViewer {
     this.frameMesh.castShadow = true
     this.frameMesh.receiveShadow = true
     this.root.add(this.frameMesh)
-    this.fit(geometry)
+    if (!this.fitted) {
+      this.fit(geometry)
+      this.fitted = true
+    }
   }
 
   dispose(): void {

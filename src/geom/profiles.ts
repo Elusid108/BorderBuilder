@@ -10,23 +10,6 @@ function line(u0: number, v0: number, u1: number, v1: number): ProfilePoint[] {
   ]
 }
 
-function arc(
-  cx: number,
-  cy: number,
-  radius: number,
-  a0: number,
-  a1: number,
-  segments: number,
-): ProfilePoint[] {
-  const pts: ProfilePoint[] = []
-  for (let i = 0; i <= segments; i++) {
-    const t = i / segments
-    const a = a0 + (a1 - a0) * t
-    pts.push({ u: cx + radius * Math.cos(a), v: cy + radius * Math.sin(a) })
-  }
-  return pts
-}
-
 function cubic(
   p0: ProfilePoint,
   p1: ProfilePoint,
@@ -176,15 +159,4 @@ function facePolyline(
     default:
       return flatFace(width, height)
   }
-}
-
-/** Sample a circular bead — kept for later profile-editor experiments. */
-export function quarterRound(
-  cx: number,
-  cy: number,
-  radius: number,
-  start: number,
-  end: number,
-): ProfilePoint[] {
-  return arc(cx, cy, radius, start, end, CURVE_SEGMENTS)
 }

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "check:geom": "npx --yes tsx src/geom/selfcheck.ts"
+    "check:geom": "tsx src/geom/selfcheck.ts"
   },
   "dependencies": {
     "three": "^0.170.0"
