@@ -11,8 +11,9 @@ Runs entirely in the browser. No backend. Intended host: **GitHub Pages**.
 - **Shapes:** rectangle or square (square locks width = height).
 - **Sizing:** artwork/sight width × height, moulding width, moulding height (overall Z).
 - **Outer size** is derived: `sight + 2 × moulding width`.
-- **Profiles:** Flat, Cove, Ogee, Chamfer — 2D cross-sections swept around four **mitered** sides (not a rounded corner sweep).
-- **Rabbet** on the back-inner corner: width (lip overlap) and depth. Optional stacked breakdown (glass + mat + backing + clearance) that sums into depth.
+- **Profiles:** 16 named mouldings in Simple / Concave / Convex / S-curve / Compound groups (Flat, Chamfer, Reverse chamfer, Step, Cove, Deep scoop, Scotia, Ovolo, Quarter-round, Bullnose, Bead, Ogee, Reverse ogee, Cove + bead, Ogee + fillet, Gallery). Each is a 2D face swept around four **mitered** sides.
+- **Face sliders:** lip width (mm, the flat landing on the glass) and face depth (0–1, how strongly the moulding reads). Independent of the back rabbet.
+- **Rabbet** on the back-inner corner: width (overlap) and depth. Optional stacked breakdown (glass + mat + backing + clearance) that sums into depth.
 - **Derived readouts:** outer size, rabbet pocket (`sight + 2 × rabbet width`), glass size (`pocket − fit clearance`), effective rabbet depth.
 - **Preview:** orbitable Three.js view, updates as you edit.
 - **Export:** binary STL, one watertight solid, units in millimetres.
@@ -73,7 +74,7 @@ Print orientation: `z = 0` is the **back** (rabbet on the bed if you print as-ex
 Ship a usable tool, not a mock.
 
 - Rectangular and square frames only.
-- A short list of swept/mitered presets (Flat, Cove, Ogee, Chamfer).
+- Named moulding catalog (16 presets) plus lip-width and face-depth sliders.
 - Full rabbet controls, including optional stack → depth.
 - Live 3D preview and binary STL download.
 - GitHub Pages deploy (Actions + `/BorderBuilder/` base).

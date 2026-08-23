@@ -21,6 +21,8 @@ export function readParams(form: HTMLFormElement): FrameParams {
     mouldingWidth: num(form.querySelector('#moulding-width')!, DEFAULT_PARAMS.mouldingWidth),
     mouldingHeight: num(form.querySelector('#moulding-height')!, DEFAULT_PARAMS.mouldingHeight),
     profile,
+    lipWidth: num(form.querySelector('#lip-width')!, DEFAULT_PARAMS.lipWidth),
+    faceDepth: num(form.querySelector('#face-depth')!, DEFAULT_PARAMS.faceDepth),
     rabbetWidth: num(form.querySelector('#rabbet-width')!, DEFAULT_PARAMS.rabbetWidth),
     rabbetDepth: num(form.querySelector('#rabbet-depth')!, DEFAULT_PARAMS.rabbetDepth),
     rabbetStack: {
@@ -41,6 +43,8 @@ export function writeParams(form: HTMLFormElement, params: FrameParams): void {
   setValue(form, '#sight-height', params.sightHeight)
   setValue(form, '#moulding-width', params.mouldingWidth)
   setValue(form, '#moulding-height', params.mouldingHeight)
+  setValue(form, '#lip-width', params.lipWidth)
+  setValue(form, '#face-depth', params.faceDepth)
   const profile = form.querySelector<HTMLSelectElement>('#profile')
   if (profile) profile.value = params.profile
   setValue(form, '#rabbet-width', params.rabbetWidth)

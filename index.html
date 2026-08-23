@@ -70,6 +70,18 @@
             </label>
             <p id="profile-hint" class="hint"></p>
             <svg id="profile-sketch" class="profile-sketch" role="img" aria-label="Moulding cross-section"></svg>
+            <label class="field slider-field">
+              <span>Lip width <em id="lip-width-readout">6 mm</em></span>
+              <input id="lip-width" type="range" min="0" max="18.8" step="0.1" />
+            </label>
+            <label class="field slider-field">
+              <span>Face depth <em id="face-depth-readout">70%</em></span>
+              <input id="face-depth" type="range" min="0" max="1" step="0.01" />
+            </label>
+            <p class="hint">
+              Lip is the flat landing on the glass (separate from the back rabbet). Face depth is how
+              strongly the moulding reads — 0 is almost flat, 1 is full character.
+            </p>
           </section>
 
           <section class="section">
@@ -77,7 +89,7 @@
             <p class="hint">Notch on the back-inner corner. Width is the lip overlap; depth is the pocket.</p>
             <div class="row">
               <label class="field">
-                <span>Width / lip (mm)</span>
+                <span>Width / overlap (mm)</span>
                 <input id="rabbet-width" type="number" min="0.1" step="0.1" />
               </label>
               <label class="field">

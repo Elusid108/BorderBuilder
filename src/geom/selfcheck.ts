@@ -2,7 +2,7 @@ import { deriveSizes } from './derived.ts'
 import { buildProfile } from './profiles.ts'
 import { buildRectFrame } from './rectFrame.ts'
 import { meshToBinaryStl } from './stl.ts'
-import { DEFAULT_PARAMS, type FrameParams, type ProfileId } from './types.ts'
+import { DEFAULT_PARAMS, PROFILE_DEFS, type FrameParams, type ProfileId } from './types.ts'
 import { inspectMesh } from './validate.ts'
 
 function assert(cond: boolean, message: string): void {
@@ -36,9 +36,11 @@ function check(params: FrameParams, label: string): void {
   console.log(`ok  ${label}: ${report.triangleCount} tris, ${derived.outerWidth}×${derived.outerHeight} mm`)
 }
 
-const profiles: ProfileId[] = ['flat', 'cove', 'ogee', 'chamfer']
+const profiles: ProfileId[] = PROFILE_DEFS.map((d) => d.id)
 for (const profile of profiles) {
   check({ ...DEFAULT_PARAMS, profile }, profile)
+  check({ ...DEFAULT_PARAMS, profile, faceDepth: 0 }, `${profile}-flat-face`)
+  check({ ...DEFAULT_PARAMS, profile, faceDepth: 1, lipWidth: 0 }, `${profile}-full-no-lip`)
 }
 
 check(
@@ -51,8 +53,12 @@ check(
     ...DEFAULT_PARAMS,
     rabbetStack: { enabled: true, glass: 2, mat: 1, backing: 1.5, clearance: 0.5 },
     profile: 'ogee',
+    lipWidth: 8,
+    faceDepth: 0.45,
   },
   'stacked-rabbet',
 )
+
+check({ ...DEFAULT_PARAMS, profile: 'gallery', lipWidth: 12 }, 'wide-lip-gallery')
 
 console.log('geometry self-check passed')

@@ -1,8 +1,8 @@
-import { deriveSizes, validateParams } from './geom/derived.ts'
+import { deriveSizes, maxLipWidth, validateParams } from './geom/derived.ts'
 import { buildProfile } from './geom/profiles.ts'
 import { buildRectFrame, frameSummary } from './geom/rectFrame.ts'
 import { downloadStl, meshToBinaryStl } from './geom/stl.ts'
-import { DEFAULT_PARAMS, PROFILE_DEFS, type FrameParams, type Mesh } from './geom/types.ts'
+import { DEFAULT_PARAMS, PROFILE_DEFS, PROFILE_GROUPS, type FrameParams, type Mesh } from './geom/types.ts'
 import { inspectMesh } from './geom/validate.ts'
 import { FrameViewer } from './preview/viewer.ts'
 import { readParams, writeParams } from './ui/params.ts'
@@ -28,12 +28,21 @@ const heightField = document.querySelector<HTMLElement>('#sight-height-field')
 const stackPanel = document.querySelector<HTMLElement>('#stack-fields')
 const depthInput = document.querySelector<HTMLInputElement>('#rabbet-depth')
 const stackEnabled = document.querySelector<HTMLInputElement>('#stack-enabled')
+const lipInput = document.querySelector<HTMLInputElement>('#lip-width')
+const faceDepthInput = document.querySelector<HTMLInputElement>('#face-depth')
+const lipReadout = document.querySelector<HTMLElement>('#lip-width-readout')
+const faceDepthReadout = document.querySelector<HTMLElement>('#face-depth-readout')
 
-for (const def of PROFILE_DEFS) {
-  const opt = document.createElement('option')
-  opt.value = def.id
-  opt.textContent = def.label
-  profileSelect.appendChild(opt)
+for (const group of PROFILE_GROUPS) {
+  const og = document.createElement('optgroup')
+  og.label = group.label
+  for (const def of PROFILE_DEFS.filter((d) => d.group === group.id)) {
+    const opt = document.createElement('option')
+    opt.value = def.id
+    opt.textContent = def.label
+    og.appendChild(opt)
+  }
+  profileSelect.appendChild(og)
 }
 
 writeParams(form, DEFAULT_PARAMS)
@@ -50,6 +59,24 @@ function syncShapeLock(): void {
   if (square && heightInput) {
     const width = form.querySelector<HTMLInputElement>('#sight-width')
     if (width) heightInput.value = width.value
+  }
+}
+
+function syncFaceSliders(): void {
+  const mouldingWidth = Number(form.querySelector<HTMLInputElement>('#moulding-width')?.value)
+  const maxLip = maxLipWidth(Number.isFinite(mouldingWidth) ? mouldingWidth : DEFAULT_PARAMS.mouldingWidth)
+  if (lipInput) {
+    lipInput.max = String(Math.round(maxLip * 10) / 10)
+    const current = lipInput.valueAsNumber
+    if (Number.isFinite(current) && current > maxLip) lipInput.value = String(maxLip)
+    if (lipReadout) {
+      const used = Number.isFinite(lipInput.valueAsNumber) ? lipInput.valueAsNumber : 0
+      lipReadout.textContent = `${formatMm(used)} mm`
+    }
+  }
+  if (faceDepthInput && faceDepthReadout) {
+    const depth = Number.isFinite(faceDepthInput.valueAsNumber) ? faceDepthInput.valueAsNumber : 0
+    faceDepthReadout.textContent = `${Math.round(depth * 100)}%`
   }
 }
 
@@ -96,6 +123,7 @@ function setIssues(messages: string[]): void {
 function rebuild(fitNote?: string): void {
   syncShapeLock()
   syncStackLock()
+  syncFaceSliders()
   const params = readParams(form)
   const issues = validateParams(params)
   updateReadouts(params)

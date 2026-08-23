@@ -1,5 +1,20 @@
 import type { DerivedSizes, FrameParams, ValidationIssue } from './types.ts'
 
+const MIN_OUTER_WALL = 1.2
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, n))
+}
+
+export function maxLipWidth(mouldingWidth: number): number {
+  return Math.max(0, mouldingWidth - MIN_OUTER_WALL)
+}
+
+/** Lip actually used on the face (clamped so an outer wall remains). */
+export function effectiveLipWidth(params: FrameParams): number {
+  return clamp(params.lipWidth, 0, maxLipWidth(params.mouldingWidth))
+}
+
 export function stackTotal(params: FrameParams): number {
   const s = params.rabbetStack
   return s.glass + s.mat + s.backing + s.clearance
@@ -30,6 +45,7 @@ export function deriveSizes(params: FrameParams): DerivedSizes {
     glassHeight: height + 2 * rw - clearance,
     effectiveRabbetDepth: depth,
     stackTotal: stackTotal(params),
+    effectiveLipWidth: effectiveLipWidth(params),
   }
 }
 
@@ -64,6 +80,17 @@ export function validateParams(params: FrameParams): ValidationIssue[] {
   }
   if (params.fitClearance < 0) {
     issues.push({ field: 'fitClearance', message: 'Fit clearance cannot be negative.' })
+  }
+  if (params.lipWidth < 0) {
+    issues.push({ field: 'lipWidth', message: 'Lip width cannot be negative.' })
+  } else if (params.mouldingWidth > 0 && params.lipWidth >= params.mouldingWidth) {
+    issues.push({
+      field: 'lipWidth',
+      message: 'Lip width must be smaller than moulding width.',
+    })
+  }
+  if (params.faceDepth < 0 || params.faceDepth > 1) {
+    issues.push({ field: 'faceDepth', message: 'Face depth must be between 0 and 1.' })
   }
   if (params.rabbetStack.enabled) {
     const s = params.rabbetStack
