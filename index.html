@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BorderBuilder</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <header class="brand">
+          <div>
+            <h1>BorderBuilder</h1>
+            <p class="tagline">Moulded frames → printable STL</p>
+          </div>
+          <span class="phase">Phase 1</span>
+        </header>
+
+        <form id="controls" class="controls" autocomplete="off">
+          <section class="section">
+            <h2>Shape</h2>
+            <div class="segmented" role="radiogroup" aria-label="Frame shape">
+              <label>
+                <input type="radio" name="shape" value="rectangle" checked />
+                <span>Rectangle</span>
+              </label>
+              <label>
+                <input type="radio" name="shape" value="square" />
+                <span>Square</span>
+              </label>
+            </div>
+          </section>
+
+          <section class="section">
+            <h2>Artwork / sight size</h2>
+            <p class="hint">Visible opening. The frame is sized from this plus moulding width.</p>
+            <div class="row">
+              <label class="field">
+                <span>Width (mm)</span>
+                <input id="sight-width" type="number" min="1" step="0.1" />
+              </label>
+              <label class="field" id="sight-height-field">
+                <span>Height (mm)</span>
+                <input id="sight-height" type="number" min="1" step="0.1" />
+              </label>
+            </div>
+          </section>
+
+          <section class="section">
+            <h2>Moulding</h2>
+            <div class="row">
+              <label class="field">
+                <span>Width (mm)</span>
+                <input id="moulding-width" type="number" min="0.5" step="0.1" />
+              </label>
+              <label class="field">
+                <span>Height / thickness (mm)</span>
+                <input id="moulding-height" type="number" min="0.5" step="0.1" />
+              </label>
+            </div>
+            <label class="field">
+              <span>Profile preset</span>
+              <select id="profile"></select>
+            </label>
+            <p id="profile-hint" class="hint"></p>
+            <svg id="profile-sketch" class="profile-sketch" role="img" aria-label="Moulding cross-section"></svg>
+          </section>
+
+          <section class="section">
+            <h2>Rabbet</h2>
+            <p class="hint">Notch on the back-inner corner. Width is the lip overlap; depth is the pocket.</p>
+            <div class="row">
+              <label class="field">
+                <span>Width / lip (mm)</span>
+                <input id="rabbet-width" type="number" min="0.1" step="0.1" />
+              </label>
+              <label class="field">
+                <span>Depth (mm)</span>
+                <input id="rabbet-depth" type="number" min="0.1" step="0.1" />
+              </label>
+            </div>
+            <label class="check">
+              <input id="stack-enabled" type="checkbox" />
+              <span>Set depth from a glazing stack</span>
+            </label>
+            <div id="stack-fields" class="stack-fields">
+              <div class="row">
+                <label class="field">
+                  <span>Glass (mm)</span>
+                  <input id="stack-glass" type="number" min="0" step="0.1" />
+                </label>
+                <label class="field">
+                  <span>Mat (mm)</span>
+                  <input id="stack-mat" type="number" min="0" step="0.1" />
+                </label>
+              </div>
+              <div class="row">
+                <label class="field">
+                  <span>Backing (mm)</span>
+                  <input id="stack-backing" type="number" min="0" step="0.1" />
+                </label>
+                <label class="field">
+                  <span>Clearance (mm)</span>
+                  <input id="stack-clearance" type="number" min="0" step="0.1" />
+                </label>
+              </div>
+            </div>
+            <label class="field">
+              <span>Glass fit clearance (mm)</span>
+              <input id="fit-clearance" type="number" min="0" step="0.1" />
+            </label>
+          </section>
+
+          <section class="section derived">
+            <h2>Derived sizes</h2>
+            <dl>
+              <div>
+                <dt>Outer size</dt>
+                <dd id="out-outer">—</dd>
+              </div>
+              <div>
+                <dt>Rabbet pocket</dt>
+                <dd id="out-pocket">—</dd>
+              </div>
+              <div>
+                <dt>Glass size</dt>
+                <dd id="out-glass">—</dd>
+              </div>
+              <div>
+                <dt>Rabbet depth</dt>
+                <dd id="out-depth">—</dd>
+              </div>
+              <div>
+                <dt>Stack total</dt>
+                <dd id="out-stack">—</dd>
+              </div>
+            </dl>
+          </section>
+
+          <ul id="issues" class="issues" hidden></ul>
+
+          <div class="actions">
+            <button id="download" type="button" class="primary">Download STL</button>
+            <button id="reset" type="button" class="ghost">Reset defaults</button>
+          </div>
+        </form>
+
+        <p class="status" id="status">Building…</p>
+        <footer class="foot">
+          Client-side only · millimetres · GitHub Pages. Drag to orbit, scroll to zoom.
+        </footer>
+      </aside>
+
+      <main class="stage">
+        <div id="preview" class="preview" aria-label="3D frame preview"></div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

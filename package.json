@@ -1,0 +1,21 @@
+{
+  "name": "border-builder",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "check:geom": "tsx src/geom/selfcheck.ts"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.170.0",
+    "tsx": "^4.20.3",
+    "typescript": "~5.9.3",
+    "vite": "^5.4.11"
+  }
+}
