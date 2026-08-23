@@ -9,6 +9,9 @@ export class FrameViewer {
   private readonly controls: OrbitControls
   private readonly root: THREE.Group
   private frameMesh: THREE.Mesh | null = null
+  private artworkMesh: THREE.Mesh | null = null
+  private artworkTexture: THREE.Texture | null = null
+  private artworkGen = 0
   private readonly resizeObserver: ResizeObserver
   private readonly host: HTMLElement
   private fitted = false
@@ -97,9 +100,71 @@ export class FrameViewer {
     }
   }
 
+  setArtwork(
+    artwork:
+      | {
+          url: string
+          width: number
+          height: number
+          z: number
+        }
+      | null,
+  ): void {
+    this.clearArtwork()
+    if (!artwork || artwork.width <= 0 || artwork.height <= 0) return
+
+    const gen = this.artworkGen
+    const loader = new THREE.TextureLoader()
+    loader.load(
+      artwork.url,
+      (texture) => {
+        if (gen !== this.artworkGen) {
+          texture.dispose()
+          return
+        }
+        texture.colorSpace = THREE.SRGBColorSpace
+        texture.flipY = true
+        const geometry = new THREE.PlaneGeometry(artwork.width, artwork.height)
+        const material = new THREE.MeshBasicMaterial({
+          map: texture,
+          transparent: true,
+          alphaTest: 0.04,
+          side: THREE.DoubleSide,
+          depthWrite: true,
+        })
+        this.artworkTexture = texture
+        this.artworkMesh = new THREE.Mesh(geometry, material)
+        this.artworkMesh.position.z = artwork.z
+        this.artworkMesh.renderOrder = 1
+        this.root.add(this.artworkMesh)
+      },
+      undefined,
+      () => {
+        /* keep the frame even if the preview photo fails to load */
+      },
+    )
+  }
+
+  clearArtwork(): void {
+    this.artworkGen++
+    if (this.artworkMesh) {
+      this.root.remove(this.artworkMesh)
+      this.artworkMesh.geometry.dispose()
+      const mat = this.artworkMesh.material
+      if (Array.isArray(mat)) mat.forEach((m) => m.dispose())
+      else mat.dispose()
+      this.artworkMesh = null
+    }
+    if (this.artworkTexture) {
+      this.artworkTexture.dispose()
+      this.artworkTexture = null
+    }
+  }
+
   dispose(): void {
     cancelAnimationFrame(this.raf)
     this.resizeObserver.disconnect()
+    this.clearArtwork()
     this.controls.dispose()
     this.renderer.dispose()
     this.renderer.domElement.remove()

@@ -10,6 +10,7 @@
     "check:geom": "tsx src/geom/selfcheck.ts"
   },
   "dependencies": {
+    "jszip": "^3.10.1",
     "three": "^0.170.0"
   },
   "devDependencies": {

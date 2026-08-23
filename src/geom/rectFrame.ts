@@ -31,5 +31,6 @@ export function buildRectFrame(params: FrameParams): Mesh {
 export function frameSummary(params: FrameParams): string {
   const { width, height } = effectiveSight(params)
   const d = deriveSizes(params)
-  return `${width}×${height} mm sight, ${d.outerWidth}×${d.outerHeight} mm outer, ${params.profile}`
+  const kind = params.shape === 'imported' ? 'imported sight' : 'sight'
+  return `${width}×${height} mm ${kind}, ${d.outerWidth}×${d.outerHeight} mm outer, ${params.profile}`
 }

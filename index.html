@@ -24,8 +24,22 @@
 
         <form id="controls" class="controls" autocomplete="off">
           <section class="section">
+            <h2>LithoLab pack</h2>
+            <p class="hint">
+              Import an STL zip or <code>.litholab</code> file. The mask becomes the opening; export
+              sizes set the artwork and rabbet.
+            </p>
+            <input id="pack-input" type="file" accept=".zip,.litholab,application/zip" hidden />
+            <div class="import-actions">
+              <button id="import-pack" type="button" class="ghost">Import pack…</button>
+              <button id="clear-import" type="button" class="ghost" hidden>Clear</button>
+            </div>
+            <p id="import-status" class="import-status" hidden></p>
+          </section>
+
+          <section class="section">
             <h2>Shape</h2>
-            <div class="segmented" role="radiogroup" aria-label="Frame shape">
+            <div id="shape-group" class="segmented" role="radiogroup" aria-label="Frame shape">
               <label>
                 <input type="radio" name="shape" value="rectangle" checked />
                 <span>Rectangle</span>
@@ -33,6 +47,10 @@
               <label>
                 <input type="radio" name="shape" value="square" />
                 <span>Square</span>
+              </label>
+              <label id="shape-imported-label" hidden>
+                <input type="radio" name="shape" value="imported" />
+                <span id="shape-imported-name">Imported</span>
               </label>
             </div>
           </section>

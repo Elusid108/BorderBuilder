@@ -148,15 +148,40 @@ input:disabled {
   cursor: not-allowed;
 }
 
+.import-actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.import-status {
+  margin: 8px 0 0;
+  color: var(--ok);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.import-status.is-error {
+  color: var(--danger);
+}
+
 .segmented {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
 
+.segmented.is-imported {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
 .segmented label {
   display: flex;
   cursor: pointer;
+}
+
+.segmented label[hidden] {
+  display: none;
 }
 
 .segmented input {

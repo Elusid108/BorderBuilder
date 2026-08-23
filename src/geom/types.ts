@@ -26,7 +26,7 @@ export interface Mesh {
   triangles: Triangle[]
 }
 
-export type ShapeKind = 'rectangle' | 'square'
+export type ShapeKind = 'rectangle' | 'square' | 'imported'
 
 export type ProfileGroup = 'simple' | 'concave' | 'convex' | 'scurve' | 'compound'
 
