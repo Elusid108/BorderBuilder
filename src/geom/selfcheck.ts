@@ -1,10 +1,10 @@
 import JSZip from 'jszip'
 import { deriveSizes } from './derived.ts'
 import { buildFrame } from './frame.ts'
-import { extractMaskPolygons, sightFromMaskImage } from './maskTrace.ts'
+import { centerFlipY, extractMaskPolygons, sightFromMaskImage } from './maskTrace.ts'
 import { offsetLoop } from './offset.ts'
 import { sweepOffsetLoft } from './offsetLoft.ts'
-import { asPolygonCorners, ensureCcw, hypot, isPolygonalOutline, minEdgeDistance, pointInPoly, sub } from './plan.ts'
+import { asPolygonCorners, ensureCcw, hypot, isPolygonalOutline, loopBounds, minEdgeDistance, pointInPoly, sub } from './plan.ts'
 import { buildProfile } from './profiles.ts'
 import { buildRectFrame } from './rectFrame.ts'
 import { meshToBinaryStl } from './stl.ts'
@@ -126,13 +126,40 @@ function stairTriangle(): PlanVertex[] {
   return ensureCcw(out)
 }
 
-function triangleImage(size = 96): { width: number; height: number; data: Uint8ClampedArray } {
+function triangleImage(size = 320): { width: number; height: number; data: Uint8ClampedArray } {
   const data = new Uint8ClampedArray(size * size * 4)
   const poly = [
     { x: size / 2, y: 3 },
     { x: size - 3, y: size - 3 },
     { x: 3, y: size - 3 },
   ]
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4
+      const v = pointInPoly({ x, y }, poly) ? 255 : 0
+      data[i] = v
+      data[i + 1] = v
+      data[i + 2] = v
+      data[i + 3] = 255
+    }
+  }
+  return { width: size, height: size, data }
+}
+
+/** Convex teardrop: dense semicircle plus a point. */
+function waterdropPoly(r = 40, n = 48): PlanVertex[] {
+  const pts: PlanVertex[] = []
+  for (let i = 0; i <= n; i++) {
+    const a = (i / n) * Math.PI
+    pts.push({ x: r * Math.cos(a), y: r * Math.sin(a) })
+  }
+  pts.push({ x: 0, y: -r * 1.35 })
+  return ensureCcw(pts)
+}
+
+function waterdropImage(size = 320): { width: number; height: number; data: Uint8ClampedArray } {
+  const data = new Uint8ClampedArray(size * size * 4)
+  const poly = waterdropPoly(size * 0.32, 48).map((p) => ({ x: p.x + size / 2, y: size / 2 - p.y }))
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const i = (y * size + x) * 4
@@ -397,6 +424,35 @@ const maskTri = sightFromMaskImage(triangleImage(), 140, 117)
 assert(maskTri.length === 3, `triangle mask: expected 3 verts, got ${maskTri.length}`)
 assert(isPolygonalOutline(maskTri), 'triangle mask: should classify as a polygon')
 console.log(`ok  triangle-mask: ${maskTri.length} verts`)
+
+const drop = waterdropPoly()
+assert(!isPolygonalOutline(drop), 'waterdrop: convex teardrop should stay organic')
+const dropB = loopBounds(drop)
+const dropW = dropB.maxX - dropB.minX
+const dropH = dropB.maxY - dropB.minY
+const dropShifted = drop.map((p) => ({ x: p.x - dropB.minX, y: p.y - dropB.minY }))
+const dropSight = centerFlipY(dropShifted, dropW, dropH)
+assert(dropSight.length > 12, `waterdrop: expected dense organic path, got ${dropSight.length} verts`)
+assert(!isPolygonalOutline(dropSight), 'waterdrop: centered sight should stay organic')
+const maskDrop = sightFromMaskImage(waterdropImage(), 140, 180)
+assert(maskDrop.length > 12, `waterdrop mask: expected many verts, got ${maskDrop.length}`)
+assert(!isPolygonalOutline(maskDrop), 'waterdrop mask: should stay organic')
+const dropMesh = buildFrame(
+  {
+    ...DEFAULT_PARAMS,
+    shape: 'imported',
+    sightWidth: 140,
+    sightHeight: 180,
+    mouldingWidth: 20,
+    rabbetWidth: 3.4,
+    rabbetDepth: 4,
+    profile: 'flat',
+  },
+  dropSight,
+)
+const dropReport = inspectMesh(dropMesh)
+assert(dropReport.watertight, `waterdrop: not watertight open=${dropReport.openEdges} nm=${dropReport.nonManifoldEdges}`)
+console.log(`ok  waterdrop-organic: ${dropSight.length} verts, mask ${maskDrop.length}, ${dropReport.triangleCount} tris`)
 
 await checkPackRoundtrip()
 

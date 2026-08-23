@@ -80,6 +80,8 @@ export function removeDegen(poly: PlanLoop, eps = 1e-9): PlanLoop {
 
 const POLYGON_MIN_VERTS = 3
 const POLYGON_MAX_VERTS = 12
+const POLYGON_DP_EPS_MM = 0.6
+const POLYGON_MIN_CORNER_DEG = 35
 
 function perpDist(p: PlanVertex, a: PlanVertex, b: PlanVertex): number {
   const dx = b.x - a.x
@@ -114,7 +116,7 @@ function douglasPeuckerOpen(pts: PlanLoop, eps: number): PlanLoop {
 export function simplifyClosed(poly: PlanLoop, epsilon?: number): PlanLoop {
   const clean = removeDegen(poly)
   if (clean.length < 3) return clean
-  const eps = epsilon ?? Math.max(0.6, perimeter(clean) * 0.004)
+  const eps = epsilon ?? POLYGON_DP_EPS_MM
   let maxI = 1
   let maxD = 0
   const first = clean[0]!
@@ -174,14 +176,37 @@ function isConvexLoop(poly: PlanLoop): boolean {
   return sign === areaSign
 }
 
+function turningAngleRad(a: PlanVertex, b: PlanVertex, c: PlanVertex): number | null {
+  const ab = sub(b, a)
+  const bc = sub(c, b)
+  const lab = hypot(ab)
+  const lbc = hypot(bc)
+  if (lab < 1e-9 || lbc < 1e-9) return null
+  const dot = (ab.x * bc.x + ab.y * bc.y) / (lab * lbc)
+  return Math.acos(Math.min(1, Math.max(-1, dot)))
+}
+
+/** True when every vertex is a real corner, not a sample on a large-radius arc. */
+function allCornersSharp(poly: PlanLoop, minDeg = POLYGON_MIN_CORNER_DEG): boolean {
+  const n = poly.length
+  if (n < 3) return false
+  const minTurn = (minDeg * Math.PI) / 180
+  for (let i = 0; i < n; i++) {
+    const ang = turningAngleRad(poly[(i - 1 + n) % n]!, poly[i]!, poly[(i + 1) % n]!)
+    if (ang === null || ang < minTurn) return false
+  }
+  return true
+}
+
 /**
- * If the outline is a sharp convex polygon (triangle…dodecagon), return the
- * corner vertices. Hearts, darts, and freeform silhouettes return null.
+ * If the outline is a sharp convex polygon (triangle…octagon), return the
+ * corner vertices. Hearts, teardrops, and freeform silhouettes return null.
  */
 export function asPolygonCorners(poly: PlanLoop): PlanLoop | null {
-  const simple = mergeCollinear(simplifyClosed(poly))
+  const simple = mergeCollinear(simplifyClosed(poly, POLYGON_DP_EPS_MM), 8)
   if (simple.length < POLYGON_MIN_VERTS || simple.length > POLYGON_MAX_VERTS) return null
   if (!isConvexLoop(simple)) return null
+  if (!allCornersSharp(simple)) return null
   return ensureCcw(simple)
 }
 

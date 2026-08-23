@@ -57,6 +57,9 @@ const importedLabel = document.querySelector<HTMLElement>('#shape-imported-label
 const importedNameEl = document.querySelector<HTMLElement>('#shape-imported-name')
 const versionEl = document.querySelector<HTMLElement>('#app-version')
 if (versionEl) versionEl.textContent = APP_LABEL
+const versionFoot = document.querySelector<HTMLElement>('#app-version-foot')
+if (versionFoot) versionFoot.textContent = APP_LABEL
+document.title = `BorderBuilder ${APP_LABEL}`
 
 for (const group of PROFILE_GROUPS) {
   const og = document.createElement('optgroup')
