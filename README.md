@@ -22,12 +22,14 @@ Validation rejects non-positive sizes, rabbet width ≥ moulding width, and rabb
 
 ## Run locally
 
+On Windows, double-click `launch.bat` in the repo root. It installs dependencies on first run, starts the Vite dev server, and opens `http://localhost:5173/BorderBuilder/`.
+
 ```bash
 npm install
 npm run dev
 ```
 
-Then open the URL Vite prints (typically `http://localhost:5173/BorderBuilder/`).
+Then open the URL Vite prints (typically `http://localhost:5173/BorderBuilder/`). The `/BorderBuilder/` path is required because Vite `base` matches GitHub Pages.
 
 ```bash
 npm run build    # tsc && vite build
