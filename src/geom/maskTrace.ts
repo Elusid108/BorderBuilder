@@ -1,8 +1,10 @@
 import {
   asPolygonCorners,
+  classifyPolygonLoops,
   ensureCcw,
+  holesInsideLoop,
   largestLoop,
-  loopBounds,
+  polygonBounds,
   signedArea,
   smoothChaikin,
   smoothRoutedPath,
@@ -19,12 +21,20 @@ export interface RgbaImage {
 
 export const MASK_MAX_VERTS = 400
 
+/** LithoLab near-black cutoff: white and mid-gray stay inside; enclosed pure black becomes holes. */
+export const NEAR_BLACK_LUM = 32
+
+export interface MaskTrace {
+  sight: PlanVertex[]
+  holes: PlanVertex[][]
+}
+
 /**
  * Build a binary "inside" grid. RGB masks (white-on-black) use luminance.
  * Images with a real alpha hole (original-masked.png) use alpha only so dark
  * photo pixels stay inside.
  */
-export function maskInsideFromImage(img: RgbaImage, threshold = 128): Uint8Array {
+export function maskInsideFromImage(img: RgbaImage, threshold = NEAR_BLACK_LUM): Uint8Array {
   const { width, height, data } = img
   const n = width * height
   let transparent = 0
@@ -32,6 +42,7 @@ export function maskInsideFromImage(img: RgbaImage, threshold = 128): Uint8Array
     if ((data[i] ?? 0) < 16) transparent++
   }
   const useAlpha = transparent > 0.01 * n
+  const blackCut = Math.min(threshold, NEAR_BLACK_LUM)
   const inside = new Uint8Array(n)
   for (let p = 0, i = 0; p < n; p++, i += 4) {
     const a = data[i + 3] ?? 0
@@ -41,7 +52,7 @@ export function maskInsideFromImage(img: RgbaImage, threshold = 128): Uint8Array
       continue
     }
     const lum = 0.2126 * (data[i] ?? 0) + 0.7152 * (data[i + 1] ?? 0) + 0.0722 * (data[i + 2] ?? 0)
-    if (lum >= threshold) inside[p] = 1
+    if (lum >= blackCut) inside[p] = 1
   }
   return inside
 }
@@ -220,7 +231,7 @@ export function extractMaskPolygons(
   img: RgbaImage,
   opts: { threshold?: number; smoothIters?: number; minLoopArea?: number } = {},
 ): PlanLoop[] {
-  const threshold = opts.threshold ?? 128
+  const threshold = opts.threshold ?? NEAR_BLACK_LUM
   const smoothIters = opts.smoothIters ?? 3
   const minLoopArea = opts.minLoopArea ?? 6
   const inside = maskInsideFromImage(img, threshold)
@@ -231,39 +242,53 @@ export function extractMaskPolygons(
 }
 
 export interface TrimmedMask {
-  polygon: PlanLoop
+  outers: PlanLoop[]
+  holes: PlanLoop[]
   trimW: number
   trimH: number
 }
 
-/** Largest loop, shifted so its bbox origin is (0, 0). */
-export function trimLargestLoop(loops: PlanLoop[]): TrimmedMask | null {
-  const raw = largestLoop(loops)
-  if (!raw) return null
-  const b = loopBounds(raw)
+/** All loops, shifted so the combined bbox origin is (0, 0), then classified. */
+export function trimMaskLoops(loops: PlanLoop[]): TrimmedMask | null {
+  const usable = loops.filter((l) => l.length >= 3)
+  if (usable.length === 0) return null
+  const b = polygonBounds(usable)
   const trimW = Math.max(1e-6, b.maxX - b.minX)
   const trimH = Math.max(1e-6, b.maxY - b.minY)
-  const polygon = raw.map((p) => ({ x: p.x - b.minX, y: p.y - b.minY }))
-  return { polygon, trimW, trimH }
+  const shifted = usable.map((loop) => loop.map((p) => ({ x: p.x - b.minX, y: p.y - b.minY })))
+  const classified = classifyPolygonLoops(shifted)
+  if (classified.outers.length === 0) return null
+  return { outers: classified.outers, holes: classified.holes, trimW, trimH }
+}
+
+function mapLoop(poly: PlanLoop, sx: number, sy: number, destW: number, destH: number): PlanVertex[] {
+  const scaled = poly.map((p) => ({ x: p.x * sx, y: p.y * sy }))
+  return centerFlipY(scaled, destW, destH)
 }
 
 /**
  * LithoLab dest mapping: stretch the trimmed mask to destW × destH, flip Y
  * into BorderBuilder plan space, and center on the origin.
  */
-export function sightFromTrimmed(trim: TrimmedMask, destW: number, destH: number): PlanVertex[] {
+export function traceFromTrimmed(trim: TrimmedMask, destW: number, destH: number): MaskTrace {
+  const outer = largestLoop(trim.outers)
+  if (!outer) throw new Error('The mask image has no usable silhouette.')
   const sx = destW / trim.trimW
   const sy = destH / trim.trimH
-  const scaled = trim.polygon.map((p) => ({ x: p.x * sx, y: p.y * sy }))
-  return centerFlipY(scaled, destW, destH)
+  const nested = holesInsideLoop(outer, trim.holes)
+  return {
+    sight: mapLoop(outer, sx, sy, destW, destH),
+    holes: nested.map((h) => mapLoop(h, sx, sy, destW, destH)),
+  }
 }
 
-/** Trace fallback: polygon already in silhouette-canvas pixels. */
-export function sightFromPixelLoops(loops: PlanLoop[], pixelSizeMm: number): PlanVertex[] {
-  const trim = trimLargestLoop(loops)
+/** Trace fallback: polygons already in silhouette-canvas pixels. */
+export function sightFromPixelLoops(loops: PlanLoop[], pixelSizeMm: number): MaskTrace {
+  const trim = trimMaskLoops(loops)
   if (!trim) throw new Error('Could not trace a silhouette from the masked image.')
-  const scaled = trim.polygon.map((p) => ({ x: p.x * pixelSizeMm, y: p.y * pixelSizeMm }))
-  return centerFlipY(scaled, trim.trimW * pixelSizeMm, trim.trimH * pixelSizeMm)
+  const destW = trim.trimW * pixelSizeMm
+  const destH = trim.trimH * pixelSizeMm
+  return traceFromTrimmed(trim, destW, destH)
 }
 
 export function centerFlipY(poly: PlanLoop, width: number, height: number): PlanVertex[] {
@@ -275,9 +300,9 @@ export function centerFlipY(poly: PlanLoop, width: number, height: number): Plan
   return smoothRoutedPath(flipped, 0.35, MASK_MAX_VERTS)
 }
 
-export function sightFromMaskImage(img: RgbaImage, destW: number, destH: number): PlanVertex[] {
+export function sightFromMaskImage(img: RgbaImage, destW: number, destH: number): MaskTrace {
   const loops = extractMaskPolygons(img, { smoothIters: 0 })
-  const trim = trimLargestLoop(loops)
+  const trim = trimMaskLoops(loops)
   if (!trim) throw new Error('The mask image has no usable silhouette.')
-  return sightFromTrimmed(trim, destW, destH)
+  return traceFromTrimmed(trim, destW, destH)
 }

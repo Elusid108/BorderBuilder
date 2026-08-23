@@ -1,6 +1,7 @@
 import { deriveSizes, maxLipWidth, validateParams } from './geom/derived.ts'
 import { buildFrame, downloadName, frameSummary, importedFrameSummary } from './geom/frame.ts'
 import { extractMaskPolygons, sightFromMaskImage, sightFromPixelLoops } from './geom/maskTrace.ts'
+import { compositeArtworkRgba, rgbaToPngBlob } from './preview/artwork.ts'
 import { buildProfile } from './geom/profiles.ts'
 import { downloadStl, meshToBinaryStl } from './geom/stl.ts'
 import { DEFAULT_PARAMS, PROFILE_DEFS, PROFILE_GROUPS, type FrameParams, type Mesh, type PlanVertex } from './geom/types.ts'
@@ -18,6 +19,7 @@ interface ImportState {
   name: string
   sourceFile: string
   sight: PlanVertex[]
+  holes: PlanVertex[][]
   silhouetteWidth: number
   silhouetteHeight: number
   artworkUrl: string | null
@@ -266,10 +268,18 @@ async function importPackFile(file: File): Promise<void> {
 
   let maskedImg = assets.maskedPngBlob ? await rgbaFromBlob(assets.maskedPngBlob) : null
   let sight: PlanVertex[]
+  let holes: PlanVertex[][]
   if (assets.maskBlob) {
-    sight = sightFromMaskImage(await rgbaFromBlob(assets.maskBlob), destW, destH)
+    const trace = sightFromMaskImage(await rgbaFromBlob(assets.maskBlob), destW, destH)
+    sight = trace.sight
+    holes = trace.holes
   } else if (maskedImg) {
-    sight = sightFromPixelLoops(extractMaskPolygons(maskedImg, { smoothIters: 0 }), assets.json.export.pixelSizeMm || 0.2)
+    const trace = sightFromPixelLoops(
+      extractMaskPolygons(maskedImg, { smoothIters: 0 }),
+      assets.json.export.pixelSizeMm || 0.2,
+    )
+    sight = trace.sight
+    holes = trace.holes
   } else {
     throw new Error('This pack has no mask or original-masked.png to trace.')
   }
@@ -280,14 +290,26 @@ async function importPackFile(file: File): Promise<void> {
   )
 
   if (imported?.artworkUrl) URL.revokeObjectURL(imported.artworkUrl)
-  const artworkBlob = assets.maskedPngBlob ?? assets.photoBlob
+  let artworkUrl: string | null = null
+  if (maskedImg) {
+    const composited = compositeArtworkRgba(maskedImg, {
+      widthMm: sil.width,
+      heightMm: sil.height,
+      sight,
+      holes,
+    })
+    artworkUrl = URL.createObjectURL(await rgbaToPngBlob(composited))
+  } else if (assets.photoBlob) {
+    artworkUrl = URL.createObjectURL(assets.photoBlob)
+  }
   imported = {
     name: assets.name,
     sourceFile: file.name,
     sight,
+    holes,
     silhouetteWidth: sil.width,
     silhouetteHeight: sil.height,
-    artworkUrl: artworkBlob ? URL.createObjectURL(artworkBlob) : null,
+    artworkUrl,
   }
 
   writeParams(form, params)

@@ -128,7 +128,7 @@ export class FrameViewer {
         const material = new THREE.MeshBasicMaterial({
           map: texture,
           transparent: true,
-          alphaTest: 0.04,
+          alphaTest: 0.5,
           side: THREE.DoubleSide,
           depthWrite: true,
         })

@@ -1,10 +1,12 @@
 import { offsetLoopAtDeltas } from './offset.ts'
 import {
   ensureCcw,
+  hypot,
   perimeter,
   removeDegen,
   resampleClosedToCount,
   rotateToLandmark,
+  sub,
 } from './plan.ts'
 import type { Mesh, PlanVertex, ProfilePoint, Triangle, Vec3 } from './types.ts'
 
@@ -52,6 +54,97 @@ function alignRing(poly: PlanVertex[], count: number): PlanVertex[] {
   return resampleClosedToCount(rotateToLandmark(ensureCcw(removeDegen(poly))), count)
 }
 
+function loopArcLengths(loop: PlanVertex[]): { segs: number[]; perim: number } {
+  const segs: number[] = []
+  let perim = 0
+  for (let i = 0; i < loop.length; i++) {
+    const len = hypot(sub(loop[(i + 1) % loop.length]!, loop[i]!))
+    segs.push(len)
+    perim += len
+  }
+  return { segs, perim }
+}
+
+function pointAtArc(loop: PlanVertex[], segs: number[], perim: number, s: number): PlanVertex {
+  let t = ((s % perim) + perim) % perim
+  for (let i = 0; i < loop.length; i++) {
+    const len = segs[i] ?? 0
+    if (t <= len || i === loop.length - 1) {
+      const u = len < 1e-12 ? 0 : t / len
+      const a = loop[i]!
+      const b = loop[(i + 1) % loop.length]!
+      return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u }
+    }
+    t -= len
+  }
+  return loop[0]!
+}
+
+function closestArcParam(
+  p: PlanVertex,
+  loop: PlanVertex[],
+  segs: number[],
+  outward?: PlanVertex,
+): number {
+  let bestD = Infinity
+  let bestS = 0
+  let acc = 0
+  const consider = (x: number, y: number, s: number) => {
+    if (outward && (x - p.x) * outward.x + (y - p.y) * outward.y < -1e-6) return
+    const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y)
+    if (d < bestD) {
+      bestD = d
+      bestS = s
+    }
+  }
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i]!
+    const b = loop[(i + 1) % loop.length]!
+    const abx = b.x - a.x
+    const aby = b.y - a.y
+    const len2 = abx * abx + aby * aby
+    const t = len2 < 1e-12 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.y - a.y) * aby) / len2))
+    consider(a.x + abx * t, a.y + aby * t, acc + t * (segs[i] ?? 0))
+    acc += segs[i] ?? 0
+  }
+  if (!Number.isFinite(bestD) && outward) return closestArcParam(p, loop, segs)
+  return bestS
+}
+
+function vertexOutward(poly: PlanVertex[], i: number): PlanVertex {
+  const n = poly.length
+  const a = poly[(i - 1 + n) % n]!
+  const c = poly[(i + 1) % n]!
+  const ox = c.y - a.y
+  const oy = -(c.x - a.x)
+  const len = Math.hypot(ox, oy) || 1
+  return { x: ox / len, y: oy / len }
+}
+
+/**
+ * Sample `outer` so vertex i is the closest outward point to inner[i], unwrapped
+ * so the walk stays monotonic. Independent arc-length alignment of a notched
+ * inner ring to a filled outer ring inverts about half the loft radials.
+ */
+function correspondRing(inner: PlanVertex[], outer: PlanVertex[]): PlanVertex[] {
+  const loop = ensureCcw(removeDegen(outer))
+  if (inner.length < 3 || loop.length < 3) return inner
+  const { segs, perim } = loopArcLengths(loop)
+  if (perim < 1e-9) return inner
+
+  const n = inner.length
+  const raw = inner.map((p, i) => closestArcParam(p, loop, segs, vertexOutward(inner, i)))
+  const unwrapped: number[] = [raw[0]!]
+  for (let i = 1; i < n; i++) {
+    let s = raw[i]!
+    const prev = unwrapped[i - 1]!
+    while (s - prev > perim / 2) s -= perim
+    while (prev - s > perim / 2) s += perim
+    unwrapped.push(s)
+  }
+  return unwrapped.map((s) => pointAtArc(loop, segs, perim, s))
+}
+
 /**
  * Build an organic frame by lofting the moulding profile between robust
  * disk-offsets of the sight outline. Concave corners (heart cleft) fill
@@ -84,7 +177,7 @@ export function sweepOffsetLoft(
       continue
     }
     const off = rings.get(u)
-    last = off && off.length >= 3 ? alignRing(off, count) : last
+    last = off && off.length >= 3 ? correspondRing(cache.get(0) ?? last, off) : last
     cache.set(u, last)
   }
 

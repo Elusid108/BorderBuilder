@@ -343,6 +343,40 @@ export function pointInPoly(pt: PlanVertex, poly: PlanLoop): boolean {
   return inside
 }
 
+/**
+ * Split marching-squares loops into outer boundaries (even nesting) and
+ * interior holes (odd nesting), e.g. the counter of a letter A.
+ * Samples `loop[0]` rather than the centroid — centroids of an A often land in the hole.
+ */
+export function classifyPolygonLoops(set: PlanLoop[]): { outers: PlanLoop[]; holes: PlanLoop[] } {
+  const outers: PlanLoop[] = []
+  const holes: PlanLoop[] = []
+  for (const loop of set) {
+    if (loop.length < 3) continue
+    const sample = loop[0]
+    if (!sample) continue
+    let nest = 0
+    for (const other of set) {
+      if (other === loop || other.length < 3) continue
+      if (pointInPoly(sample, other)) nest++
+    }
+    if (nest % 2 === 0) outers.push(loop)
+    else holes.push(loop)
+  }
+  if (outers.length === 0 && holes.length > 0) {
+    return { outers: holes, holes: [] }
+  }
+  return { outers, holes }
+}
+
+/** Holes whose sample vertex lies inside `outer`. */
+export function holesInsideLoop(outer: PlanLoop, holes: PlanLoop[]): PlanLoop[] {
+  return holes.filter((h) => {
+    const sample = h[0]
+    return sample !== undefined && pointInPoly(sample, outer)
+  })
+}
+
 export function minEdgeDistance(pt: PlanVertex, poly: PlanLoop): number {
   let best = Infinity
   for (let i = 0; i < poly.length; i++) {

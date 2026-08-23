@@ -1,10 +1,11 @@
 import JSZip from 'jszip'
 import { deriveSizes } from './derived.ts'
 import { buildFrame } from './frame.ts'
-import { centerFlipY, extractMaskPolygons, sightFromMaskImage } from './maskTrace.ts'
+import { centerFlipY, extractMaskPolygons, maskInsideFromImage, NEAR_BLACK_LUM, sightFromMaskImage } from './maskTrace.ts'
 import { offsetLoop } from './offset.ts'
 import { sweepOffsetLoft } from './offsetLoft.ts'
-import { asPolygonCorners, ensureCcw, hypot, isPolygonalOutline, loopBounds, minEdgeDistance, pointInPoly, sub } from './plan.ts'
+import { asPolygonCorners, classifyPolygonLoops, ensureCcw, hypot, isPolygonalOutline, loopBounds, minEdgeDistance, pointInPoly, sub } from './plan.ts'
+import { compositeArtworkRgba } from '../preview/artwork.ts'
 import { buildProfile } from './profiles.ts'
 import { buildRectFrame } from './rectFrame.ts'
 import { meshToBinaryStl } from './stl.ts'
@@ -173,6 +174,42 @@ function waterdropImage(size = 320): { width: number; height: number; data: Uint
   return { width: size, height: size, data }
 }
 
+/** Bold A: gray body (below 128, above near-black) with a black triangular counter. */
+function letterAPolys(size: number): { outer: PlanVertex[]; hole: PlanVertex[] } {
+  const outer: PlanVertex[] = [
+    { x: size * 0.18, y: size * 0.92 },
+    { x: size * 0.5, y: size * 0.08 },
+    { x: size * 0.82, y: size * 0.92 },
+    { x: size * 0.68, y: size * 0.92 },
+    { x: size * 0.58, y: size * 0.58 },
+    { x: size * 0.42, y: size * 0.58 },
+    { x: size * 0.32, y: size * 0.92 },
+  ]
+  const hole: PlanVertex[] = [
+    { x: size * 0.5, y: size * 0.22 },
+    { x: size * 0.58, y: size * 0.5 },
+    { x: size * 0.42, y: size * 0.5 },
+  ]
+  return { outer, hole }
+}
+
+function letterAImage(size = 160, bodyGray = 80): { width: number; height: number; data: Uint8ClampedArray } {
+  const { outer, hole } = letterAPolys(size)
+  const data = new Uint8ClampedArray(size * size * 4)
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4
+      const inBody = pointInPoly({ x, y }, outer) && !pointInPoly({ x, y }, hole)
+      const v = inBody ? bodyGray : 0
+      data[i] = v
+      data[i + 1] = v
+      data[i + 2] = v
+      data[i + 3] = 255
+    }
+  }
+  return { width: size, height: size, data }
+}
+
 function sampleProject(): ProjectJsonV1 {
   return {
     version: 1,
@@ -296,8 +333,9 @@ async function checkPackRoundtrip(): Promise<void> {
 function checkMaskTrace(): void {
   const img = circleImage()
   const dest = 100
-  const sight = sightFromMaskImage(img, dest, dest)
+  const { sight, holes } = sightFromMaskImage(img, dest, dest)
   assert(sight.length >= 16, 'mask trace: too few verts')
+  assert(holes.length === 0, `mask trace: circle should have no holes, got ${holes.length}`)
   const xs = sight.map((p) => p.x)
   const ys = sight.map((p) => p.y)
   const w = Math.max(...xs) - Math.min(...xs)
@@ -307,6 +345,90 @@ function checkMaskTrace(): void {
   const loops = extractMaskPolygons(img)
   assert(loops.length >= 1, 'mask trace: no loops')
   console.log(`ok  mask-trace: ${sight.length} verts, bbox ${w.toFixed(1)}×${h.toFixed(1)} mm`)
+}
+
+function sampleAt(img: { width: number; data: Uint8ClampedArray | Uint8Array }, x: number, y: number): [number, number, number, number] {
+  const i = (y * img.width + x) * 4
+  return [img.data[i] ?? 0, img.data[i + 1] ?? 0, img.data[i + 2] ?? 0, img.data[i + 3] ?? 0]
+}
+
+function checkLetterAMask(): void {
+  const size = 160
+  const bodyGray = 80
+  assert(bodyGray > NEAR_BLACK_LUM && bodyGray < 128, 'letter-A fixture gray should sit between cutoffs')
+  const img = letterAImage(size, bodyGray)
+  const { outer, hole } = letterAPolys(size)
+  const bodyPt = { x: size * 0.28, y: size * 0.72 }
+  const holePt = { x: size * 0.5, y: size * 0.38 }
+  const outPt = { x: 8, y: 8 }
+  assert(pointInPoly(bodyPt, outer) && !pointInPoly(bodyPt, hole), 'letter-A: body sample')
+  assert(pointInPoly(holePt, hole), 'letter-A: hole sample')
+
+  const inside = maskInsideFromImage(img)
+  const at = (pt: PlanVertex) => inside[Math.round(pt.y) * size + Math.round(pt.x)] ?? 0
+  assert(at(bodyPt) === 1, 'letter-A: gray body must stay inside at near-black cutoff')
+  assert(at(holePt) === 0, 'letter-A: black counter must stay outside')
+  assert(at(outPt) === 0, 'letter-A: background must stay outside')
+
+  const loops = extractMaskPolygons(img, { smoothIters: 0 })
+  const classified = classifyPolygonLoops(loops)
+  assert(classified.outers.length === 1, `letter-A: expected 1 outer, got ${classified.outers.length}`)
+  assert(classified.holes.length === 1, `letter-A: expected 1 hole, got ${classified.holes.length}`)
+
+  const dest = size
+  const trace = sightFromMaskImage(img, dest, dest)
+  assert(trace.holes.length === 1, `letter-A trace: expected 1 hole, got ${trace.holes.length}`)
+  assert(trace.sight.length > 12, `letter-A trace: expected traced letter outline, got ${trace.sight.length} verts`)
+  assert(!isPolygonalOutline(trace.sight), 'letter-A trace: A outline should stay organic, not a hull polygon')
+
+  const photo = letterAImage(size, 255)
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4
+      const inBody = pointInPoly({ x, y }, outer) && !pointInPoly({ x, y }, hole)
+      if (inBody) {
+        photo.data[i] = 220
+        photo.data[i + 1] = 30
+        photo.data[i + 2] = 40
+        photo.data[i + 3] = 255
+      } else {
+        photo.data[i + 3] = 0
+      }
+    }
+  }
+  const planOuter = centerFlipY(outer, size, size)
+  const planHole = centerFlipY(hole, size, size)
+  const composited = compositeArtworkRgba(photo, {
+    widthMm: dest,
+    heightMm: dest,
+    sight: planOuter,
+    holes: [planHole],
+  })
+  const bodyPx = sampleAt(composited, Math.round(bodyPt.x), Math.round(bodyPt.y))
+  const holePx = sampleAt(composited, Math.round(holePt.x), Math.round(holePt.y))
+  const outPx = sampleAt(composited, Math.round(outPt.x), Math.round(outPt.y))
+  assert(bodyPx[3] === 255, `letter-A art: body alpha ${bodyPx[3]}`)
+  assert(bodyPx[0] > 180 && bodyPx[1] < 60, `letter-A art: body should keep photo RGB, got ${bodyPx.join(',')}`)
+  assert(holePx[3] === 0, `letter-A art: counter should stay clear, alpha ${holePx[3]}`)
+  assert(outPx[3] === 0, `letter-A art: outside alpha ${outPx[3]}`)
+
+  const aParams: FrameParams = {
+    ...DEFAULT_PARAMS,
+    shape: 'imported',
+    sightWidth: 100,
+    sightHeight: 100,
+    mouldingWidth: 20,
+    rabbetWidth: 3.4,
+    rabbetDepth: 4,
+    profile: 'flat',
+  }
+  const tight = sightFromMaskImage(img, 100, 100)
+  const aMesh = buildFrame(aParams, tight.sight)
+  const aReport = inspectMesh(aMesh)
+  assert(aReport.watertight, `letter-A loft: not watertight open=${aReport.openEdges} nm=${aReport.nonManifoldEdges}`)
+  const aInside = intrusionCount(aMesh, tight.sight, aParams.rabbetDepth + 0.4, 1)
+  assert(aInside === 0, `letter-A loft: ${aInside} face triangles sit inside the opening`)
+  console.log(`ok  letter-A-mask: ${trace.sight.length} outer verts, ${trace.holes[0]?.length ?? 0} hole verts`)
 }
 
 const profiles: ProfileId[] = PROFILE_DEFS.map((d) => d.id)
@@ -421,9 +543,10 @@ assert(triInside === 0, `triangle: ${triInside} face triangles sit inside the si
 console.log(`ok  triangle-miter: ${triSight.length} verts, ${triReport.triangleCount} tris, no inner intrusion`)
 
 const maskTri = sightFromMaskImage(triangleImage(), 140, 117)
-assert(maskTri.length === 3, `triangle mask: expected 3 verts, got ${maskTri.length}`)
-assert(isPolygonalOutline(maskTri), 'triangle mask: should classify as a polygon')
-console.log(`ok  triangle-mask: ${maskTri.length} verts`)
+assert(maskTri.sight.length === 3, `triangle mask: expected 3 verts, got ${maskTri.sight.length}`)
+assert(maskTri.holes.length === 0, `triangle mask: expected no holes, got ${maskTri.holes.length}`)
+assert(isPolygonalOutline(maskTri.sight), 'triangle mask: should classify as a polygon')
+console.log(`ok  triangle-mask: ${maskTri.sight.length} verts`)
 
 const drop = waterdropPoly()
 assert(!isPolygonalOutline(drop), 'waterdrop: convex teardrop should stay organic')
@@ -435,8 +558,9 @@ const dropSight = centerFlipY(dropShifted, dropW, dropH)
 assert(dropSight.length > 12, `waterdrop: expected dense organic path, got ${dropSight.length} verts`)
 assert(!isPolygonalOutline(dropSight), 'waterdrop: centered sight should stay organic')
 const maskDrop = sightFromMaskImage(waterdropImage(), 140, 180)
-assert(maskDrop.length > 12, `waterdrop mask: expected many verts, got ${maskDrop.length}`)
-assert(!isPolygonalOutline(maskDrop), 'waterdrop mask: should stay organic')
+assert(maskDrop.sight.length > 12, `waterdrop mask: expected many verts, got ${maskDrop.sight.length}`)
+assert(maskDrop.holes.length === 0, `waterdrop mask: expected no holes, got ${maskDrop.holes.length}`)
+assert(!isPolygonalOutline(maskDrop.sight), 'waterdrop mask: should stay organic')
 const dropMesh = buildFrame(
   {
     ...DEFAULT_PARAMS,
@@ -452,7 +576,9 @@ const dropMesh = buildFrame(
 )
 const dropReport = inspectMesh(dropMesh)
 assert(dropReport.watertight, `waterdrop: not watertight open=${dropReport.openEdges} nm=${dropReport.nonManifoldEdges}`)
-console.log(`ok  waterdrop-organic: ${dropSight.length} verts, mask ${maskDrop.length}, ${dropReport.triangleCount} tris`)
+console.log(`ok  waterdrop-organic: ${dropSight.length} verts, mask ${maskDrop.sight.length}, ${dropReport.triangleCount} tris`)
+
+checkLetterAMask()
 
 await checkPackRoundtrip()
 
