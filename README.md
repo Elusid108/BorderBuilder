@@ -2,25 +2,25 @@
 
 Client-side STL generator for picture frames and lithophane borders. You set a **sight size** and **moulding profile**, or import a **LithoLab pack**; the app builds a single watertight solid and downloads a millimetre-unit STL for 3D printing.
 
-**v0.4.1** — Letter-A and other notched organic frames: the moulding follows the traced outline (including the gap between an A’s legs) instead of a convex hull or a straight bar across the bottom; the preview shows the masked letter, not the unclipped photo; offset-loft rings stay corresponded to the sight so the legs no longer fold through the opening. v0.4.0 classified stencil holes and kept gray mask fill inside the silhouette. The original “Phase 1 rectangles only” plan has been overtaken by LithoLab import and mixed plan shapes. This README describes what actually ships, then a tentative backlog.
+**v0.4.2** — Organic LithoLab rabbets follow the pack outline (mask + border) plus fit clearance instead of a smoothed outer blob. v0.4.1 — Letter-A and other notched organic frames: the moulding follows the traced outline (including the gap between an A’s legs) instead of a convex hull or a straight bar across the bottom; the preview shows the masked letter, not the unclipped photo; offset-loft rings stay corresponded to the sight so the legs no longer fold through the opening. v0.4.0 classified stencil holes and kept gray mask fill inside the silhouette. The original “Phase 1 rectangles only” plan has been overtaken by LithoLab import and mixed plan shapes. This README describes what actually ships, then a tentative backlog.
 
 Runs entirely in the browser. No backend. Intended host: **GitHub Pages**. The header pill, footer, page title, and STL file header all read the version from `package.json`.
 
 ## What works now
 
 - **Manual shapes:** rectangle or square (square locks width = height).
-- **LithoLab import:** drop an STL zip or `.litholab` file. The mask becomes the opening; export width/height set dest/sight; the lithophane border plus **fit clearance** (default **0.4 mm**, minimum 0.4 mm on import) size the rabbet; lithophane stack height plus **0.4 mm** slack sizes rabbet depth. Preview artwork is `original-masked.png` composited to the letter body; enclosed **counters** stay clear (not filled from the raw photo, not painted as a floating island). Stencil **holes** are classified and **ignored** for moulding: the frame traces the letter’s outer outline (including the gap between an A’s legs) and does not add an inner wall around the triangle. Mid-gray mask fill stays inside (near-black cutoff), so a gradient in the letter body does not punch the silhouette.
+- **LithoLab import:** drop an STL zip or `.litholab` file. The mask becomes the opening; export width/height set dest/sight; the lithophane border plus **fit clearance** (default **0.4 mm**, minimum 0.4 mm on import) size the rabbet; lithophane stack height plus **0.4 mm** slack sizes rabbet depth. The **back pocket** is a functional offset of that pack outline (mask + border + clearance), not a decorative simplification of the outer moulding. Preview artwork is `original-masked.png` composited to the letter body; enclosed **counters** stay clear (not filled from the raw photo, not painted as a floating island). Stencil **holes** are classified and **ignored** for moulding: the frame traces the letter’s outer outline (including the gap between an A’s legs) and does not add an inner wall around the triangle. Mid-gray mask fill stays inside (near-black cutoff), so a gradient in the letter body does not punch the silhouette.
 - **Imported plan kernels:**
   - **Sharp convex polygons** (triangle through octagon-like corners, every remaining turn ≥ 35°) keep corners and use **true miters**.
-  - **Organic silhouettes** (heart, waterdrop, letter, freeform) use a dense routed spline and an **offset loft** (EDT / disk offset). Concave clefts fill instead of self-intersecting; each offset ring is sampled from the sight path so a notch that the outer offset fills (an A’s legs) does not twist or overlap.
+  - **Organic silhouettes** (heart, waterdrop, letter, freeform) use a dense routed spline and an **offset loft** (EDT / disk offset). The decorative outer fills concave clefts instead of self-intersecting; the **rabbet wall** is sampled from the sight onto the true offset at rabbet width so gear teeth and similar pack edges stay in the pocket. Each ring stays corresponded to the sight so a notch that the outer offset fills (an A’s legs) does not twist or overlap.
 - **Sizing:** artwork/sight width × height, moulding width, moulding height (overall Z). Outer size is `sight + 2 × moulding width` for rectangles; imported shapes show a bounding box.
 - **Profiles:** 16 named mouldings in Simple / Concave / Convex / S-curve / Compound groups (Flat, Chamfer, Reverse chamfer, Step, Cove, Deep scoop, Scotia, Ovolo, Quarter-round, Bullnose, Bead, Ogee, Reverse ogee, Cove + bead, Ogee + fillet, Gallery).
 - **Face sliders:** lip width (mm, the flat landing on the glass) and face depth (0–1, how strongly the moulding reads). Independent of the back rabbet.
-- **Rabbet** on the back-inner corner: width (overlap) and depth. Optional stacked breakdown (glass + mat + backing + clearance) that sums into depth.
+- **Rabbet** on the back-inner corner: width (overlap) and depth. On LithoLab imports this well follows the lithophane + border outline plus fit clearance. Optional stacked breakdown (glass + mat + backing + clearance) that sums into depth.
 - **Fit clearance:** rectangles shrink the glass-size readout so glass is not press-fit. LithoLab import adds the same value around the pack in the rabbet well.
 - **Derived readouts:** outer size, rabbet pocket, glass size, effective rabbet depth, stack total.
 - **Preview:** orbitable Three.js view, updates as you edit. Faceted shading on polygonal imports; smoother shading on organic ones.
-- **Export:** binary STL, one watertight solid, millimetres, header `BorderBuilder v0.4.1`.
+- **Export:** binary STL, one watertight solid, millimetres, header `BorderBuilder v0.4.2`.
 - **Defaults:** 100 × 150 mm artwork, 20 mm moulding, 15 mm thick, 6 mm rabbet width, 5 mm rabbet depth, 0.4 mm fit clearance.
 
 Validation rejects non-positive sizes, rabbet width ≥ moulding width, and rabbet depth ≥ moulding height.
@@ -62,13 +62,13 @@ Every frame is three layers of description. The first two are implemented for re
 2. **Moulding profile** — a closed 2D polyline in `(u, v)`:
    - `u = 0` at the sight edge, increasing toward the outer edge.
    - `v = 0` at the **back**, increasing toward the front face.
-   - The **rabbet is part of this profile**: a notch at the back-inner corner (`u` in `[0, rabbetWidth]`, `v` in `[0, rabbetDepth]`). The front opening stays at sight size; the back pocket is larger by about `2 × rabbet width`.
+   - The **rabbet is part of this profile**: a notch at the back-inner corner (`u` in `[0, rabbetWidth]`, `v` in `[0, rabbetDepth]`). The front opening stays at sight size; the back pocket is the same outline offset by rabbet width (LithoLab: pack border + fit clearance). On organic shapes that pocket keeps concavities that have not yet filled; only the decorative outer moulding fills deep clefts.
 3. **Optional decoration** — motifs or text on the face after the solid exists (not built yet).
 
 ### How the solid is built
 
 - **Rectangles, squares, and sharp imported polygons** use **true miters** in `src/geom/miterSweep.ts`. Each profile vertex is placed at the intersection of two offset edges. Adjacent sides share those vertices, so the mesh is one manifold solid.
-- **Organic imported paths** (heart, waterdrop, letter, freeform) use `src/geom/offsetLoft.ts`: a distance-transform offset of the sight at each profile `u`, then a loft between those rings. Rings are corresponded to the sight (nearest outward point) rather than independently arc-length aligned, so a deep notch that the outer offset fills does not fold the moulding through the opening. Concave clefts fill instead of colliding; large-radius curves do not collapse to a few mitered chords.
+- **Organic imported paths** (heart, waterdrop, letter, freeform) use `src/geom/offsetLoft.ts`: a distance-transform offset of the sight at each profile `u`, then a loft between those rings. The outer ring is corresponded with `mergeWalk` so convex tip caps stay round. Intermediate rings, including the **rabbet wall**, are sampled from the sight onto each isosurface (not projected inward from the outer blob), so a gear-tooth pack still fits the pocket. Rings stay corresponded to the sight so a deep notch that the outer offset fills does not fold the moulding through the opening. Concave clefts fill on the outer moulding instead of colliding; large-radius curves do not collapse to a few mitered chords.
 - Classification lives in `asPolygonCorners` (`src/geom/plan.ts`): after a 0.6 mm simplify, a convex loop with 3–12 vertices whose **every** remaining turn is at least 35° is treated as a polygon. Teardrops and other shallow sweeps stay organic.
 
 Print orientation: `z = 0` is the **back** (rabbet on the bed if you print as-exported). Flip in the slicer if you want the face on the bed.

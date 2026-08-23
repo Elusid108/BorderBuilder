@@ -104,7 +104,11 @@
 
           <section class="section">
             <h2>Rabbet</h2>
-            <p class="hint">Notch on the back-inner corner. Width is the lip overlap; depth is the pocket.</p>
+            <p class="hint">
+              Notch on the back-inner corner. Width is how far the pocket stands out from the
+              opening; depth is how deep. On LithoLab imports the pocket follows the lithophane
+              (mask + border), not a simplified outer shape.
+            </p>
             <div class="row">
               <label class="field">
                 <span>Width / overlap (mm)</span>
@@ -146,8 +150,8 @@
               <input id="fit-clearance" type="number" min="0" step="0.1" />
             </label>
             <p class="hint">
-              Rectangles: shrinks the glass-size readout. LithoLab import: extra room around the pack in
-              the rabbet (at least 0.4 mm).
+              Rectangles: shrinks the glass-size readout. LithoLab import: extra room around the
+              lithophane + border in the rabbet (at least 0.4 mm), following that outline.
             </p>
           </section>
 

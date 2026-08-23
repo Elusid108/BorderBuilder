@@ -97,6 +97,28 @@ function dartPoly(): PlanVertex[] {
   ])
 }
 
+/** Shallow gear: valleys survive a 3.4 mm offset but fill at a 20 mm moulding offset. */
+function gearPoly(rInner = 32, rOuter = 48, teeth = 8): PlanVertex[] {
+  const pts: PlanVertex[] = []
+  const step = (Math.PI * 2) / teeth
+  const toothFrac = 0.42
+  const nPer = 6
+  for (let t = 0; t < teeth; t++) {
+    const a0 = t * step
+    const aTooth = a0 + step * toothFrac
+    const a1 = a0 + step
+    for (let i = 0; i <= nPer; i++) {
+      const a = a0 + (aTooth - a0) * (i / nPer)
+      pts.push({ x: rOuter * Math.cos(a), y: rOuter * Math.sin(a) })
+    }
+    for (let i = 1; i <= nPer; i++) {
+      const a = aTooth + (a1 - aTooth) * (i / nPer)
+      pts.push({ x: rInner * Math.cos(a), y: rInner * Math.sin(a) })
+    }
+  }
+  return ensureCcw(pts)
+}
+
 function trianglePoly(): PlanVertex[] {
   return ensureCcw([
     { x: 0, y: 50 },
@@ -238,6 +260,83 @@ function sampleProject(): ProjectJsonV1 {
       maxThickness: 2.7,
     },
   }
+}
+
+/** Back-face vertices on the rabbet hole (z≈0, about `rw` out from the sight). */
+function pocketWallXY(mesh: Mesh, sight: PlanVertex[], rw: number): PlanVertex[] {
+  const out: PlanVertex[] = []
+  const seen = new Set<string>()
+  const lo = Math.max(0.6, rw * 0.45)
+  const hi = rw * 1.7 + 0.8
+  for (const t of mesh.triangles) {
+    for (const v of [t.a, t.b, t.c]) {
+      if (v.z > 0.05) continue
+      const pt = { x: v.x, y: v.y }
+      const d = minEdgeDistance(pt, sight)
+      if (d < lo || d > hi) continue
+      const key = `${Math.round(v.x * 50)}|${Math.round(v.y * 50)}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(pt)
+    }
+  }
+  return out
+}
+
+function nearestDist(pt: PlanVertex, pts: PlanVertex[]): number {
+  let best = Infinity
+  for (const q of pts) {
+    const d = Math.hypot(pt.x - q.x, pt.y - q.y)
+    if (d < best) best = d
+  }
+  return best
+}
+
+function checkRabbetFollowsSight(sight: PlanVertex[], params: FrameParams, label: string): void {
+  const pocket = offsetLoop(sight, params.rabbetWidth)
+  const outer = offsetLoop(sight, params.mouldingWidth)
+  if (!pocket || pocket.length < 12) throw new Error(`${label}: missing pocket offset`)
+  if (!outer || outer.length < 12) throw new Error(`${label}: missing outer offset`)
+
+  const valleys = pocket.filter((p) => minEdgeDistance(p, outer) > 4)
+  assert(
+    valleys.length >= 8,
+    `${label}: expected pocket valleys that the outer offset fills, got ${valleys.length}`,
+  )
+
+  const mesh = buildFrame({ ...params, shape: 'imported' }, sight)
+  const report = inspectMesh(mesh)
+  assert(report.watertight, `${label}: not watertight open=${report.openEdges} nm=${report.nonManifoldEdges}`)
+
+  const wall = pocketWallXY(mesh, sight, params.rabbetWidth)
+  assert(wall.length >= 32, `${label}: too few pocket-wall verts (${wall.length})`)
+
+  let maxValley = 0
+  let minValleyToOuter = Infinity
+  for (const p of valleys) {
+    const d = nearestDist(p, wall)
+    if (d > maxValley) maxValley = d
+    const toOuter = minEdgeDistance(p, outer)
+    if (toOuter < minValleyToOuter) minValleyToOuter = toOuter
+  }
+  assert(
+    maxValley < 2,
+    `${label}: pocket wall misses a valley by ${maxValley.toFixed(2)} mm (follows outer blob?)`,
+  )
+  assert(
+    maxValley < minValleyToOuter * 0.4,
+    `${label}: valley gap ${maxValley.toFixed(2)} mm is too close to the outer offset (${minValleyToOuter.toFixed(2)} mm)`,
+  )
+
+  let maxWall = 0
+  for (const p of wall) {
+    const d = minEdgeDistance(p, pocket)
+    if (d > maxWall) maxWall = d
+  }
+  assert(maxWall < 2, `${label}: pocket wall strays ${maxWall.toFixed(2)} mm from offset(sight, rabbetWidth)`)
+  console.log(
+    `ok  ${label}: ${wall.length} wall verts, valley gap ${maxValley.toFixed(2)} mm, wall error ${maxWall.toFixed(2)} mm`,
+  )
 }
 
 function intrusionCount(mesh: Mesh, sight: PlanVertex[], zMin: number, inset: number): number {
@@ -489,6 +588,22 @@ const dartReport = inspectMesh(dartMesh)
 assert(dartReport.watertight, `dart: not watertight open=${dartReport.openEdges} nm=${dartReport.nonManifoldEdges}`)
 assert(dartReport.triangleCount > 32, 'dart: too few triangles')
 console.log(`ok  dart-offset-loft: ${dartReport.triangleCount} tris`)
+
+checkRabbetFollowsSight(
+  gearPoly(),
+  {
+    ...DEFAULT_PARAMS,
+    shape: 'imported',
+    sightWidth: 96,
+    sightHeight: 96,
+    mouldingWidth: 20,
+    mouldingHeight: 15,
+    rabbetWidth: 3.4,
+    rabbetDepth: 4,
+    profile: 'flat',
+  },
+  'gear-rabbet-follow',
+)
 
 const heartSight = heartPoly()
 const heartParams: FrameParams = {

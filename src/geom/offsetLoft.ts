@@ -194,8 +194,10 @@ function mergeWalk(
 
 /**
  * Build an organic frame by lofting the moulding profile between robust
- * disk-offsets of the sight outline. Concave corners (heart cleft) fill
- * instead of self-intersecting.
+ * disk-offsets of the sight outline. The decorative outer still fills
+ * concave clefts (heart, gear valleys); intermediate rings — including
+ * the rabbet wall — are sampled from the sight onto each isosurface so
+ * the pocket keeps concavities that have not yet filled.
  */
 export function sweepOffsetLoft(
   inner: PlanVertex[],
@@ -225,17 +227,17 @@ export function sweepOffsetLoft(
     cache.set(quantizeU(maxU), merged.outer)
     last = merged.outer
   }
+  const innerSrc = cache.get(0) ?? last
   for (const u of unique) {
     if (Math.abs(u) < 1e-6) {
-      cache.set(u, cache.get(0) ?? last)
+      cache.set(u, innerSrc)
       continue
     }
     if (Math.abs(u - maxU) < 1e-6 && cache.has(quantizeU(maxU))) continue
     const off = rings.get(u)
-    const src = cache.get(quantizeU(maxU))
     last =
-      off && off.length >= 3 && src && src.length >= 3
-        ? src.map((p) => closestPointOnLoop(p, off))
+      off && off.length >= 3 && innerSrc.length >= 3
+        ? innerSrc.map((p) => closestPointOnLoop(p, off))
         : last
     cache.set(u, last)
   }
