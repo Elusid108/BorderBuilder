@@ -2,12 +2,13 @@ import JSZip from 'jszip'
 import { deriveSizes } from './derived.ts'
 import { buildFrame } from './frame.ts'
 import { extractMaskPolygons, sightFromMaskImage } from './maskTrace.ts'
-import { sweepTransportedProfile } from './pathSweep.ts'
-import { ensureCcw } from './plan.ts'
+import { offsetLoop } from './offset.ts'
+import { sweepOffsetLoft } from './offsetLoft.ts'
+import { ensureCcw, hypot, minEdgeDistance, pointInPoly, sub } from './plan.ts'
 import { buildProfile } from './profiles.ts'
 import { buildRectFrame } from './rectFrame.ts'
 import { meshToBinaryStl } from './stl.ts'
-import { DEFAULT_PARAMS, PROFILE_DEFS, type FrameParams, type PlanVertex, type ProfileId } from './types.ts'
+import { DEFAULT_PARAMS, PROFILE_DEFS, type FrameParams, type Mesh, type PlanVertex, type ProfileId } from './types.ts'
 import { inspectMesh } from './validate.ts'
 import { mapPackToFrameParams, unpackLitholabPack, type ProjectJsonV1 } from '../import/litholabPack.ts'
 
@@ -68,7 +69,18 @@ function circlePoly(radius: number, n = 96): PlanVertex[] {
   return ensureCcw(out)
 }
 
-/** Classic cardioid-style heart, plus a V-notch dart for a sharp cleft. */
+function heartPoly(scale = 3.4, n = 200): PlanVertex[] {
+  const pts: PlanVertex[] = []
+  for (let i = 0; i < n; i++) {
+    const t = (i / n) * Math.PI * 2
+    const s = Math.sin(t)
+    const x = 16 * s * s * s
+    const y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)
+    pts.push({ x: x * scale, y: y * scale })
+  }
+  return ensureCcw(pts)
+}
+
 function dartPoly(): PlanVertex[] {
   return ensureCcw([
     { x: 0, y: 42 },
@@ -114,8 +126,40 @@ function sampleProject(): ProjectJsonV1 {
   }
 }
 
+function intrusionCount(mesh: Mesh, sight: PlanVertex[], zMin: number, inset: number): number {
+  let n = 0
+  for (const t of mesh.triangles) {
+    const cx = (t.a.x + t.b.x + t.c.x) / 3
+    const cy = (t.a.y + t.b.y + t.c.y) / 3
+    const cz = (t.a.z + t.b.z + t.c.z) / 3
+    if (cz < zMin) continue
+    const pt = { x: cx, y: cy }
+    if (pointInPoly(pt, sight) && minEdgeDistance(pt, sight) > inset) n++
+  }
+  return n
+}
+
+function maxTurnDeg(poly: PlanVertex[]): number {
+  let max = 0
+  const n = poly.length
+  for (let i = 0; i < n; i++) {
+    const a = poly[(i - 1 + n) % n]!
+    const b = poly[i]!
+    const c = poly[(i + 1) % n]!
+    const ab = sub(b, a)
+    const bc = sub(c, b)
+    const lab = hypot(ab)
+    const lbc = hypot(bc)
+    if (lab < 1e-9 || lbc < 1e-9) continue
+    const dot = (ab.x * bc.x + ab.y * bc.y) / (lab * lbc)
+    const ang = (Math.acos(Math.min(1, Math.max(-1, dot))) * 180) / Math.PI
+    if (ang > max) max = ang
+  }
+  return max
+}
+
 function checkOrganic(label: string, sight: PlanVertex[], params: FrameParams, expectOuter: number): void {
-  const mesh = sweepTransportedProfile(sight, buildProfile(params))
+  const mesh = sweepOffsetLoft(sight, buildProfile(params))
   const report = inspectMesh(mesh)
   assert(report.triangleCount > 32, `${label}: too few triangles`)
   assert(
@@ -125,8 +169,8 @@ function checkOrganic(label: string, sight: PlanVertex[], params: FrameParams, e
   const { min, max } = report.bounds
   const w = max.x - min.x
   const h = max.y - min.y
-  assert(nearly(w, expectOuter, 1.2), `${label}: outer width ${w} != ~${expectOuter}`)
-  assert(nearly(h, expectOuter, 1.2) || h > params.sightHeight, `${label}: unexpected outer height ${h}`)
+  assert(nearly(w, expectOuter, 1.0), `${label}: outer width ${w} != ~${expectOuter}`)
+  assert(nearly(h, expectOuter, 1.0) || h > params.sightHeight, `${label}: unexpected outer height ${h}`)
   assert(min.z >= -1e-3, `${label}: back should sit at z≈0`)
   assert(max.z <= params.mouldingHeight + 0.05, `${label}: taller than moulding height`)
   console.log(`ok  ${label}: ${report.triangleCount} tris, ${w.toFixed(2)}×${h.toFixed(2)} mm`)
@@ -224,14 +268,45 @@ const organicParams: FrameParams = {
   rabbetDepth: 4,
   profile: 'flat',
 }
-checkOrganic('circle-transport', circlePoly(50), organicParams, 100 + 2 * 12)
+checkOrganic('circle-offset-loft', circlePoly(50), organicParams, 100 + 2 * 12)
+
+const circleOuter = offsetLoop(circlePoly(50), 12)
+if (!circleOuter || circleOuter.length < 32) throw new Error('circle offset: missing loop')
+const circleTurn = maxTurnDeg(circleOuter)
+assert(circleTurn < 8, `circle offset: max turn ${circleTurn.toFixed(1)}° looks like grid stairs`)
+console.log(`ok  circle-offset-smooth: ${circleOuter.length} verts, max turn ${circleTurn.toFixed(2)}°`)
+
+const heartOuter = offsetLoop(heartPoly(), 20)
+if (!heartOuter || heartOuter.length < 32) throw new Error('heart offset: missing loop')
+const heartTurn = maxTurnDeg(heartOuter)
+assert(heartTurn < 16, `heart offset: max turn ${heartTurn.toFixed(1)}° looks like grid stairs`)
+console.log(`ok  heart-offset-smooth: ${heartOuter.length} verts, max turn ${heartTurn.toFixed(2)}°`)
 
 const dartParams: FrameParams = { ...organicParams, sightWidth: 72, sightHeight: 84, profile: 'chamfer' }
 const dartMesh = buildFrame({ ...dartParams, shape: 'imported' }, dartPoly())
 const dartReport = inspectMesh(dartMesh)
 assert(dartReport.watertight, `dart: not watertight open=${dartReport.openEdges} nm=${dartReport.nonManifoldEdges}`)
 assert(dartReport.triangleCount > 32, 'dart: too few triangles')
-console.log(`ok  dart-transport: ${dartReport.triangleCount} tris`)
+console.log(`ok  dart-offset-loft: ${dartReport.triangleCount} tris`)
+
+const heartSight = heartPoly()
+const heartParams: FrameParams = {
+  ...DEFAULT_PARAMS,
+  shape: 'imported',
+  sightWidth: 110,
+  sightHeight: 100,
+  mouldingWidth: 20,
+  mouldingHeight: 15,
+  rabbetWidth: 3.5,
+  rabbetDepth: 4,
+  profile: 'flat',
+}
+const heartMesh = buildFrame(heartParams, heartSight)
+const heartReport = inspectMesh(heartMesh)
+assert(heartReport.watertight, `heart: not watertight open=${heartReport.openEdges} nm=${heartReport.nonManifoldEdges}`)
+const inside = intrusionCount(heartMesh, heartSight, heartParams.rabbetDepth + 0.4, 2)
+assert(inside === 0, `heart: ${inside} face triangles sit inside the sight opening (cleft collision)`)
+console.log(`ok  heart-offset-loft: ${heartReport.triangleCount} tris, no cleft intrusion`)
 
 await checkPackRoundtrip()
 

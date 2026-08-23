@@ -79,11 +79,19 @@ export function removeDegen(poly: PlanLoop, eps = 1e-9): PlanLoop {
 }
 
 /** Uniform arc-length resample of a closed loop. */
-export function resampleClosed(poly: PlanLoop, spacing: number, maxVerts = 512): PlanLoop {
+export function perimeter(poly: PlanLoop): number {
+  let perim = 0
+  for (let i = 0; i < poly.length; i++) {
+    perim += hypot(sub(poly[(i + 1) % poly.length]!, poly[i]!))
+  }
+  return perim
+}
+
+export function resampleClosedToCount(poly: PlanLoop, count: number): PlanLoop {
   const clean = removeDegen(poly)
   if (clean.length < 3) return clean
-
   const n = clean.length
+  const targetCount = Math.max(3, Math.floor(count))
   const seg: number[] = new Array(n)
   let perim = 0
   for (let i = 0; i < n; i++) {
@@ -93,12 +101,11 @@ export function resampleClosed(poly: PlanLoop, spacing: number, maxVerts = 512):
   }
   if (perim < 1e-9) return clean
 
-  const count = Math.max(32, Math.min(maxVerts, Math.round(perim / Math.max(spacing, 1e-3))))
   const out: PlanLoop = []
   let i = 0
   let acc = 0
-  for (let k = 0; k < count; k++) {
-    const target = (k * perim) / count
+  for (let k = 0; k < targetCount; k++) {
+    const target = (k * perim) / targetCount
     while (acc + (seg[i] ?? 0) < target && i < n - 1) {
       acc += seg[i] ?? 0
       i++
@@ -110,4 +117,109 @@ export function resampleClosed(poly: PlanLoop, spacing: number, maxVerts = 512):
     out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t })
   }
   return removeDegen(out)
+}
+
+/** Uniform arc-length resample of a closed loop. */
+export function resampleClosed(poly: PlanLoop, spacing: number, maxVerts = 512): PlanLoop {
+  const clean = removeDegen(poly)
+  if (clean.length < 3) return clean
+  const perim = perimeter(clean)
+  if (perim < 1e-9) return clean
+  const count = Math.max(32, Math.min(maxVerts, Math.round(perim / Math.max(spacing, 1e-3))))
+  return resampleClosedToCount(clean, count)
+}
+
+export function rotateToLandmark(poly: PlanLoop): PlanLoop {
+  if (poly.length < 3) return poly
+  let start = 0
+  for (let i = 1; i < poly.length; i++) {
+    const p = poly[i]!
+    const s = poly[start]!
+    if (p.y < s.y - 1e-9 || (Math.abs(p.y - s.y) < 1e-9 && p.x < s.x)) start = i
+  }
+  if (start === 0) return poly
+  return poly.slice(start).concat(poly.slice(0, start))
+}
+
+export function smoothChaikin(poly: PlanLoop, iterations: number): PlanLoop {
+  if (poly.length < 3 || iterations <= 0) return poly
+  let pts = poly
+  for (let it = 0; it < iterations; it++) {
+    const n = pts.length
+    const next: PlanLoop = new Array(n * 2)
+    for (let i = 0; i < n; i++) {
+      const a = pts[i]!
+      const b = pts[(i + 1) % n]!
+      next[i * 2] = { x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 }
+      next[i * 2 + 1] = { x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 }
+    }
+    pts = next
+  }
+  return pts
+}
+
+/** Closed centripetal Catmull-Rom through `a,b,c,d` at parameter t in [0,1] on segment b→c. */
+function crPoint(a: PlanVertex, b: PlanVertex, c: PlanVertex, d: PlanVertex, t: number): PlanVertex {
+  const t2 = t * t
+  const t3 = t2 * t
+  return {
+    x: 0.5 * (2 * b.x + (-a.x + c.x) * t + (2 * a.x - 5 * b.x + 4 * c.x - d.x) * t2 + (-a.x + 3 * b.x - 3 * c.x + d.x) * t3),
+    y: 0.5 * (2 * b.y + (-a.y + c.y) * t + (2 * a.y - 5 * b.y + 4 * c.y - d.y) * t2 + (-a.y + 3 * b.y - 3 * c.y + d.y) * t3),
+  }
+}
+
+/**
+ * Kill pixel jaggies: modest control polygon, Chaikin, Catmull-Rom, dense resample.
+ * Keeps overall silhouette (heart cleft) while reading as a routed edge.
+ */
+export function smoothRoutedPath(poly: PlanLoop, spacing = 0.35, maxVerts = 800): PlanLoop {
+  const clean = removeDegen(ensureCcw(poly))
+  if (clean.length < 3) return clean
+  const controlBudget = Math.min(280, Math.max(160, Math.round(perimeter(clean) / 2.5)))
+  const controls = decimateClosed(clean, controlBudget)
+  const rounded = smoothChaikin(controls, 4)
+  const n = rounded.length
+  const spline: PlanLoop = []
+  const samplesPerSeg = 6
+  for (let i = 0; i < n; i++) {
+    const a = rounded[(i - 1 + n) % n]!
+    const b = rounded[i]!
+    const c = rounded[(i + 1) % n]!
+    const d = rounded[(i + 2) % n]!
+    for (let s = 0; s < samplesPerSeg; s++) spline.push(crPoint(a, b, c, d, s / samplesPerSeg))
+  }
+  return resampleClosed(spline, spacing, maxVerts)
+}
+
+export function pointInPoly(pt: PlanVertex, poly: PlanLoop): boolean {
+  let inside = false
+  const n = poly.length
+  let j = n - 1
+  for (let i = 0; i < n; i++) {
+    const a = poly[i]!
+    const b = poly[j]!
+    if (a.y > pt.y !== b.y > pt.y) {
+      const xCross = a.x + ((pt.y - a.y) * (b.x - a.x)) / (b.y - a.y)
+      if (pt.x < xCross) inside = !inside
+    }
+    j = i
+  }
+  return inside
+}
+
+export function minEdgeDistance(pt: PlanVertex, poly: PlanLoop): number {
+  let best = Infinity
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i]!
+    const b = poly[(i + 1) % poly.length]!
+    const abx = b.x - a.x
+    const aby = b.y - a.y
+    const len2 = abx * abx + aby * aby
+    const t = len2 < 1e-12 ? 0 : Math.max(0, Math.min(1, ((pt.x - a.x) * abx + (pt.y - a.y) * aby) / len2))
+    const dx = pt.x - (a.x + abx * t)
+    const dy = pt.y - (a.y + aby * t)
+    const d = Math.hypot(dx, dy)
+    if (d < best) best = d
+  }
+  return best
 }

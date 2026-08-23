@@ -220,7 +220,7 @@ function rebuild(fitNote?: string): void {
   try {
     const mesh = buildFrame(params, imported?.sight)
     const report = inspectMesh(mesh)
-    viewer.setMesh(mesh)
+    viewer.setMesh(mesh, { smooth: params.shape === 'imported' })
     syncArtwork(params)
     lastMesh = mesh
     lastParams = params

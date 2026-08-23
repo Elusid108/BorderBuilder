@@ -1,5 +1,5 @@
 import { deriveSizes, validateParams } from './derived.ts'
-import { sweepTransportedProfile } from './pathSweep.ts'
+import { sweepOffsetLoft } from './offsetLoft.ts'
 import { buildProfile } from './profiles.ts'
 import { buildRectFrame } from './rectFrame.ts'
 import type { FrameParams, Mesh, PlanVertex } from './types.ts'
@@ -16,7 +16,7 @@ export function buildFrame(params: FrameParams, importedSight?: PlanVertex[] | n
     if (!importedSight || importedSight.length < 3) {
       throw new Error('Imported pack is missing a usable mask outline.')
     }
-    return sweepTransportedProfile(importedSight, buildProfile(params))
+    return sweepOffsetLoft(importedSight, buildProfile(params))
   }
   return buildRectFrame(params)
 }

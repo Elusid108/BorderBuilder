@@ -53,7 +53,7 @@ export class FrameViewer {
     this.loop()
   }
 
-  setMesh(mesh: FrameMesh): void {
+  setMesh(mesh: FrameMesh, opts?: { smooth?: boolean }): void {
     if (this.frameMesh) {
       this.root.remove(this.frameMesh)
       this.frameMesh.geometry.dispose()
@@ -87,7 +87,7 @@ export class FrameViewer {
       color: 0xc4a574,
       roughness: 0.48,
       metalness: 0.04,
-      flatShading: true,
+      flatShading: opts?.smooth !== true,
     })
 
     this.frameMesh = new THREE.Mesh(geometry, material)
