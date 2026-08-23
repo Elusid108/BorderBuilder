@@ -576,6 +576,12 @@ const dropMesh = buildFrame(
 )
 const dropReport = inspectMesh(dropMesh)
 assert(dropReport.watertight, `waterdrop: not watertight open=${dropReport.openEdges} nm=${dropReport.nonManifoldEdges}`)
+const dropSightB = loopBounds(dropSight)
+const tipPad = Math.min(
+  dropSightB.minY - dropReport.bounds.min.y,
+  dropReport.bounds.max.y - dropSightB.maxY,
+)
+assert(tipPad > 18, `waterdrop: outer tip pad ${tipPad.toFixed(2)} mm looks flattened`)
 console.log(`ok  waterdrop-organic: ${dropSight.length} verts, mask ${maskDrop.sight.length}, ${dropReport.triangleCount} tris`)
 
 checkLetterAMask()

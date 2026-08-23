@@ -121,16 +121,43 @@ function vertexOutward(poly: PlanVertex[], i: number): PlanVertex {
   return { x: ox / len, y: oy / len }
 }
 
+function closestPointOnLoop(p: PlanVertex, loop: PlanVertex[]): PlanVertex {
+  let bestX = loop[0]!.x
+  let bestY = loop[0]!.y
+  let bestD = Infinity
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i]!
+    const b = loop[(i + 1) % loop.length]!
+    const abx = b.x - a.x
+    const aby = b.y - a.y
+    const len2 = abx * abx + aby * aby
+    const t = len2 < 1e-12 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.y - a.y) * aby) / len2))
+    const x = a.x + abx * t
+    const y = a.y + aby * t
+    const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y)
+    if (d < bestD) {
+      bestD = d
+      bestX = x
+      bestY = y
+    }
+  }
+  return { x: bestX, y: bestY }
+}
+
 /**
- * Sample `outer` so vertex i is the closest outward point to inner[i], unwrapped
- * so the walk stays monotonic. Independent arc-length alignment of a notched
- * inner ring to a filled outer ring inverts about half the loft radials.
+ * Pair each inner vertex to the outer ring, then fill large outer-arc gaps
+ * (convex tip caps) so the loft keeps the disk-offset silhouette. Inner-only
+ * closest-point mapping chords those caps flat.
  */
-function correspondRing(inner: PlanVertex[], outer: PlanVertex[]): PlanVertex[] {
+function mergeWalk(
+  inner: PlanVertex[],
+  outer: PlanVertex[],
+  spacing: number,
+): { inner: PlanVertex[]; outer: PlanVertex[] } {
   const loop = ensureCcw(removeDegen(outer))
-  if (inner.length < 3 || loop.length < 3) return inner
+  if (inner.length < 3 || loop.length < 3) return { inner, outer: inner }
   const { segs, perim } = loopArcLengths(loop)
-  if (perim < 1e-9) return inner
+  if (perim < 1e-9) return { inner, outer: inner }
 
   const n = inner.length
   const raw = inner.map((p, i) => closestArcParam(p, loop, segs, vertexOutward(inner, i)))
@@ -142,7 +169,27 @@ function correspondRing(inner: PlanVertex[], outer: PlanVertex[]): PlanVertex[] 
     while (prev - s > perim / 2) s += perim
     unwrapped.push(s)
   }
-  return unwrapped.map((s) => pointAtArc(loop, segs, perim, s))
+
+  const outInner: PlanVertex[] = []
+  const outOuter: PlanVertex[] = []
+  const minGap = spacing * 1.5
+  for (let i = 0; i < n; i++) {
+    outInner.push(inner[i]!)
+    outOuter.push(pointAtArc(loop, segs, perim, unwrapped[i]!))
+    const t0 = unwrapped[i]!
+    const t1 = i + 1 < n ? unwrapped[i + 1]! : unwrapped[0]! + perim
+    const gap = t1 - t0
+    if (gap <= minGap) continue
+    const a = inner[i]!
+    const b = inner[(i + 1) % n]!
+    const nIns = Math.max(1, Math.round(gap / spacing) - 1)
+    for (let k = 1; k <= nIns; k++) {
+      const f = k / (nIns + 1)
+      outInner.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f })
+      outOuter.push(pointAtArc(loop, segs, perim, t0 + gap * f))
+    }
+  }
+  return { inner: outInner, outer: outOuter }
 }
 
 /**
@@ -171,13 +218,25 @@ export function sweepOffsetLoft(
   cache.set(0, last)
 
   const rings = offsetLoopAtDeltas(sight, unique, { maxGrid, spacing, maxVerts: count })
+  const maxOff = rings.get(quantizeU(maxU))
+  if (maxOff && maxOff.length >= 3) {
+    const merged = mergeWalk(cache.get(0) ?? last, maxOff, spacing)
+    cache.set(0, merged.inner)
+    cache.set(quantizeU(maxU), merged.outer)
+    last = merged.outer
+  }
   for (const u of unique) {
     if (Math.abs(u) < 1e-6) {
       cache.set(u, cache.get(0) ?? last)
       continue
     }
+    if (Math.abs(u - maxU) < 1e-6 && cache.has(quantizeU(maxU))) continue
     const off = rings.get(u)
-    last = off && off.length >= 3 ? correspondRing(cache.get(0) ?? last, off) : last
+    const src = cache.get(quantizeU(maxU))
+    last =
+      off && off.length >= 3 && src && src.length >= 3
+        ? src.map((p) => closestPointOnLoop(p, off))
+        : last
     cache.set(u, last)
   }
 
@@ -186,7 +245,7 @@ export function sweepOffsetLoft(
     return cache.get(key) ?? cache.get(0) ?? last
   }
 
-  const n = count
+  const n = cache.get(0)?.length ?? count
   const m = profile.length
   const triangles: Triangle[] = []
 
