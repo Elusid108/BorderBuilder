@@ -4,12 +4,14 @@ import { extractMaskPolygons, sightFromMaskImage, sightFromPixelLoops } from './
 import { buildProfile } from './geom/profiles.ts'
 import { downloadStl, meshToBinaryStl } from './geom/stl.ts'
 import { DEFAULT_PARAMS, PROFILE_DEFS, PROFILE_GROUPS, type FrameParams, type Mesh, type PlanVertex } from './geom/types.ts'
+import { isPolygonalOutline } from './geom/plan.ts'
 import { inspectMesh } from './geom/validate.ts'
 import { rgbaFromBlob } from './import/imageData.ts'
 import { mapPackToFrameParams, silhouetteSizeMm, unpackLitholabPack } from './import/litholabPack.ts'
 import { FrameViewer } from './preview/viewer.ts'
 import { readParams, writeParams } from './ui/params.ts'
 import { renderProfileSketch } from './ui/profileSketch.ts'
+import { APP_LABEL, STL_HEADER } from './version.ts'
 import './style.css'
 
 interface ImportState {
@@ -53,6 +55,8 @@ const importStatus = document.querySelector<HTMLElement>('#import-status')
 const shapeGroup = document.querySelector<HTMLElement>('#shape-group')
 const importedLabel = document.querySelector<HTMLElement>('#shape-imported-label')
 const importedNameEl = document.querySelector<HTMLElement>('#shape-imported-name')
+const versionEl = document.querySelector<HTMLElement>('#app-version')
+if (versionEl) versionEl.textContent = APP_LABEL
 
 for (const group of PROFILE_GROUPS) {
   const og = document.createElement('optgroup')
@@ -220,7 +224,7 @@ function rebuild(fitNote?: string): void {
   try {
     const mesh = buildFrame(params, imported?.sight)
     const report = inspectMesh(mesh)
-    viewer.setMesh(mesh, { smooth: params.shape === 'imported' })
+    viewer.setMesh(mesh, { smooth: params.shape === 'imported' && !isPolygonalOutline(imported?.sight ?? []) })
     syncArtwork(params)
     lastMesh = mesh
     lastParams = params
@@ -262,7 +266,7 @@ async function importPackFile(file: File): Promise<void> {
   if (assets.maskBlob) {
     sight = sightFromMaskImage(await rgbaFromBlob(assets.maskBlob), destW, destH)
   } else if (maskedImg) {
-    sight = sightFromPixelLoops(extractMaskPolygons(maskedImg), assets.json.export.pixelSizeMm || 0.2)
+    sight = sightFromPixelLoops(extractMaskPolygons(maskedImg, { smoothIters: 0 }), assets.json.export.pixelSizeMm || 0.2)
   } else {
     throw new Error('This pack has no mask or original-masked.png to trace.')
   }
@@ -295,7 +299,7 @@ form.addEventListener('change', scheduleRebuild)
 downloadBtn.addEventListener('click', () => {
   if (!lastMesh || !lastParams) return
   const name = downloadName(lastParams, imported?.name)
-  downloadStl(meshToBinaryStl(lastMesh, 'BorderBuilder'), name)
+  downloadStl(meshToBinaryStl(lastMesh, STL_HEADER), name)
 })
 
 resetBtn?.addEventListener('click', () => {

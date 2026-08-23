@@ -1,5 +1,7 @@
 import { deriveSizes, validateParams } from './derived.ts'
+import { sweepMiteredProfile } from './miterSweep.ts'
 import { sweepOffsetLoft } from './offsetLoft.ts'
+import { asPolygonCorners } from './plan.ts'
 import { buildProfile } from './profiles.ts'
 import { buildRectFrame } from './rectFrame.ts'
 import type { FrameParams, Mesh, PlanVertex } from './types.ts'
@@ -16,6 +18,8 @@ export function buildFrame(params: FrameParams, importedSight?: PlanVertex[] | n
     if (!importedSight || importedSight.length < 3) {
       throw new Error('Imported pack is missing a usable mask outline.')
     }
+    const corners = asPolygonCorners(importedSight)
+    if (corners) return sweepMiteredProfile(corners, buildProfile(params))
     return sweepOffsetLoft(importedSight, buildProfile(params))
   }
   return buildRectFrame(params)

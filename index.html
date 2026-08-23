@@ -19,7 +19,7 @@
             <h1>BorderBuilder</h1>
             <p class="tagline">Moulded frames → printable STL</p>
           </div>
-          <span class="phase">Phase 1</span>
+          <span class="version" id="app-version"></span>
         </header>
 
         <form id="controls" class="controls" autocomplete="off">
@@ -142,9 +142,13 @@
               </div>
             </div>
             <label class="field">
-              <span>Glass fit clearance (mm)</span>
+              <span>Fit clearance (mm)</span>
               <input id="fit-clearance" type="number" min="0" step="0.1" />
             </label>
+            <p class="hint">
+              Rectangles: shrinks the glass-size readout. LithoLab import: extra room around the pack in
+              the rabbet (at least 0.4 mm).
+            </p>
           </section>
 
           <section class="section derived">

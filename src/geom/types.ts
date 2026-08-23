@@ -70,7 +70,7 @@ export interface FrameParams {
   rabbetWidth: number
   rabbetDepth: number
   rabbetStack: RabbetStack
-  /** Shrinkage applied to the glass-size readout so glass is not press-fit. */
+  /** Extra room in the rabbet: shrinks the glass readout; LithoLab import adds it around the pack. */
   fitClearance: number
 }
 
@@ -124,7 +124,7 @@ export const DEFAULT_PARAMS: FrameParams = {
     backing: 1.5,
     clearance: 0.5,
   },
-  fitClearance: 0.5,
+  fitClearance: 0.4,
 }
 
 export const PROFILE_DEFS: readonly ProfileDef[] = [

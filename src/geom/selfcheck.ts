@@ -4,13 +4,13 @@ import { buildFrame } from './frame.ts'
 import { extractMaskPolygons, sightFromMaskImage } from './maskTrace.ts'
 import { offsetLoop } from './offset.ts'
 import { sweepOffsetLoft } from './offsetLoft.ts'
-import { ensureCcw, hypot, minEdgeDistance, pointInPoly, sub } from './plan.ts'
+import { asPolygonCorners, ensureCcw, hypot, isPolygonalOutline, minEdgeDistance, pointInPoly, sub } from './plan.ts'
 import { buildProfile } from './profiles.ts'
 import { buildRectFrame } from './rectFrame.ts'
 import { meshToBinaryStl } from './stl.ts'
 import { DEFAULT_PARAMS, PROFILE_DEFS, type FrameParams, type Mesh, type PlanVertex, type ProfileId } from './types.ts'
 import { inspectMesh } from './validate.ts'
-import { mapPackToFrameParams, unpackLitholabPack, type ProjectJsonV1 } from '../import/litholabPack.ts'
+import { mapPackToFrameParams, PACK_XY_FIT_MM, unpackLitholabPack, type ProjectJsonV1 } from '../import/litholabPack.ts'
 
 function assert(cond: boolean, message: string): void {
   if (!cond) throw new Error(message)
@@ -94,6 +94,56 @@ function dartPoly(): PlanVertex[] {
     { x: -36, y: 22 },
     { x: -8, y: 18 },
   ])
+}
+
+function trianglePoly(): PlanVertex[] {
+  return ensureCcw([
+    { x: 0, y: 50 },
+    { x: 62, y: -42 },
+    { x: -62, y: -42 },
+  ])
+}
+
+/** Dense stair-stepped triangle, as if traced from a low-res mask. */
+function stairTriangle(): PlanVertex[] {
+  const corners = trianglePoly()
+  const out: PlanVertex[] = []
+  for (let i = 0; i < 3; i++) {
+    const a = corners[i]!
+    const b = corners[(i + 1) % 3]!
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const len = Math.hypot(dx, dy)
+    const nx = -dy / len
+    const ny = dx / len
+    const steps = 36
+    for (let s = 0; s < steps; s++) {
+      const t = s / steps
+      const jag = s % 2 === 0 ? 0.18 : -0.18
+      out.push({ x: a.x + dx * t + nx * jag, y: a.y + dy * t + ny * jag })
+    }
+  }
+  return ensureCcw(out)
+}
+
+function triangleImage(size = 96): { width: number; height: number; data: Uint8ClampedArray } {
+  const data = new Uint8ClampedArray(size * size * 4)
+  const poly = [
+    { x: size / 2, y: 3 },
+    { x: size - 3, y: size - 3 },
+    { x: 3, y: size - 3 },
+  ]
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4
+      const v = pointInPoly({ x, y }, poly) ? 255 : 0
+      data[i] = v
+      data[i + 1] = v
+      data[i + 2] = v
+      data[i + 3] = 255
+    }
+  }
+  return { width: size, height: size, data }
 }
 
 function sampleProject(): ProjectJsonV1 {
@@ -182,7 +232,9 @@ async function checkPackRoundtrip(): Promise<void> {
   assert(mapped.shape === 'imported', 'map: shape should be imported')
   assert(nearly(mapped.sightWidth, 140), 'map: dest width')
   assert(nearly(mapped.sightHeight, 132.6), 'map: dest height')
-  assert(nearly(mapped.rabbetWidth, 3 + DEFAULT_PARAMS.fitClearance), 'map: rabbet width = border + fit')
+  assert(nearly(mapped.rabbetWidth, 3 + Math.max(DEFAULT_PARAMS.fitClearance, PACK_XY_FIT_MM)), 'map: rabbet width = border + max(fit, 0.4)')
+  const tight = mapPackToFrameParams(json, { ...DEFAULT_PARAMS, fitClearance: 0 })
+  assert(nearly(tight.rabbetWidth, 3 + PACK_XY_FIT_MM), 'map: zero fit still gets 0.4 mm XY gap')
   assert(mapped.rabbetDepth > 3.5 && mapped.rabbetDepth < 6, `map: rabbet depth ${mapped.rabbetDepth}`)
   assert(mapped.mouldingHeight > mapped.rabbetDepth, 'map: moulding taller than rabbet')
   assert(!mapped.rabbetStack.enabled, 'map: stack should be off')
@@ -307,6 +359,44 @@ assert(heartReport.watertight, `heart: not watertight open=${heartReport.openEdg
 const inside = intrusionCount(heartMesh, heartSight, heartParams.rabbetDepth + 0.4, 2)
 assert(inside === 0, `heart: ${inside} face triangles sit inside the sight opening (cleft collision)`)
 console.log(`ok  heart-offset-loft: ${heartReport.triangleCount} tris, no cleft intrusion`)
+
+assert(isPolygonalOutline(trianglePoly()), 'triangle: should classify as a polygon')
+assert(!isPolygonalOutline(heartPoly()), 'heart: should stay organic')
+assert(!isPolygonalOutline(dartPoly()), 'dart: concave, should stay organic')
+const stairCorners = asPolygonCorners(stairTriangle())
+assert(stairCorners !== null && stairCorners.length === 3, `stair triangle: expected 3 corners, got ${stairCorners?.length ?? 0}`)
+if (!stairCorners || stairCorners.length !== 3) throw new Error('stair triangle: missing corners')
+const tri = trianglePoly()
+for (let i = 0; i < 3; i++) {
+  const a = tri[i]!
+  const b = tri[(i + 1) % 3]!
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+  assert(minEdgeDistance(mid, stairCorners) < 0.8, 'triangle: mid-edge bowed inward after simplify')
+}
+
+const triParams: FrameParams = {
+  ...DEFAULT_PARAMS,
+  shape: 'imported',
+  sightWidth: 140,
+  sightHeight: 117,
+  mouldingWidth: 20,
+  mouldingHeight: 15,
+  rabbetWidth: 3.4,
+  rabbetDepth: 4.05,
+  profile: 'bullnose',
+}
+const triSight = asPolygonCorners(tri)!
+const triMesh = buildFrame(triParams, tri)
+const triReport = inspectMesh(triMesh)
+assert(triReport.watertight, `triangle: not watertight open=${triReport.openEdges} nm=${triReport.nonManifoldEdges}`)
+const triInside = intrusionCount(triMesh, triSight, triParams.rabbetDepth + 0.4, 2)
+assert(triInside === 0, `triangle: ${triInside} face triangles sit inside the sight opening`)
+console.log(`ok  triangle-miter: ${triSight.length} verts, ${triReport.triangleCount} tris, no inner intrusion`)
+
+const maskTri = sightFromMaskImage(triangleImage(), 140, 117)
+assert(maskTri.length === 3, `triangle mask: expected 3 verts, got ${maskTri.length}`)
+assert(isPolygonalOutline(maskTri), 'triangle mask: should classify as a polygon')
+console.log(`ok  triangle-mask: ${maskTri.length} verts`)
 
 await checkPackRoundtrip()
 

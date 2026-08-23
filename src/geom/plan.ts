@@ -78,6 +78,117 @@ export function removeDegen(poly: PlanLoop, eps = 1e-9): PlanLoop {
   return out
 }
 
+const POLYGON_MIN_VERTS = 3
+const POLYGON_MAX_VERTS = 12
+
+function perpDist(p: PlanVertex, a: PlanVertex, b: PlanVertex): number {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const len = Math.hypot(dx, dy)
+  if (len < 1e-12) return hypot(sub(p, a))
+  return Math.abs((p.x - a.x) * dy - (p.y - a.y) * dx) / len
+}
+
+function douglasPeuckerOpen(pts: PlanLoop, eps: number): PlanLoop {
+  if (pts.length <= 2) return pts.slice()
+  const a = pts[0]!
+  const b = pts[pts.length - 1]!
+  let maxD = -1
+  let maxI = -1
+  for (let i = 1; i < pts.length - 1; i++) {
+    const d = perpDist(pts[i]!, a, b)
+    if (d > maxD) {
+      maxD = d
+      maxI = i
+    }
+  }
+  if (maxD > eps && maxI > 0) {
+    const left = douglasPeuckerOpen(pts.slice(0, maxI + 1), eps)
+    const right = douglasPeuckerOpen(pts.slice(maxI), eps)
+    return left.slice(0, -1).concat(right)
+  }
+  return [a, b]
+}
+
+/** Closed Douglas–Peucker. Epsilon is millimetres. */
+export function simplifyClosed(poly: PlanLoop, epsilon?: number): PlanLoop {
+  const clean = removeDegen(poly)
+  if (clean.length < 3) return clean
+  const eps = epsilon ?? Math.max(0.6, perimeter(clean) * 0.004)
+  let maxI = 1
+  let maxD = 0
+  const first = clean[0]!
+  for (let i = 1; i < clean.length; i++) {
+    const d = hypot(sub(clean[i]!, first))
+    if (d > maxD) {
+      maxD = d
+      maxI = i
+    }
+  }
+  const chain1 = clean.slice(0, maxI + 1)
+  const chain2 = clean.slice(maxI).concat([first])
+  const s1 = douglasPeuckerOpen(chain1, eps)
+  const s2 = douglasPeuckerOpen(chain2, eps)
+  return removeDegen(s1.slice(0, -1).concat(s2.slice(0, -1)))
+}
+
+/** Drop vertices whose turning angle is below `minTurnDeg` (collinear stairs). */
+export function mergeCollinear(poly: PlanLoop, minTurnDeg = 12): PlanLoop {
+  const clean = removeDegen(poly)
+  if (clean.length < 3) return clean
+  const minTurn = (minTurnDeg * Math.PI) / 180
+  const n = clean.length
+  const out: PlanLoop = []
+  for (let i = 0; i < n; i++) {
+    const a = clean[(i - 1 + n) % n]!
+    const b = clean[i]!
+    const c = clean[(i + 1) % n]!
+    const ab = sub(b, a)
+    const bc = sub(c, b)
+    const lab = hypot(ab)
+    const lbc = hypot(bc)
+    if (lab < 1e-9 || lbc < 1e-9) continue
+    const dot = (ab.x * bc.x + ab.y * bc.y) / (lab * lbc)
+    const ang = Math.acos(Math.min(1, Math.max(-1, dot)))
+    if (ang >= minTurn) out.push(b)
+  }
+  return out.length >= 3 ? out : clean
+}
+
+function isConvexLoop(poly: PlanLoop): boolean {
+  const n = poly.length
+  if (n < 3) return false
+  const areaSign = Math.sign(signedArea(poly))
+  if (areaSign === 0) return false
+  let sign = 0
+  for (let i = 0; i < n; i++) {
+    const a = poly[(i - 1 + n) % n]!
+    const b = poly[i]!
+    const c = poly[(i + 1) % n]!
+    const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x)
+    if (Math.abs(cross) < 1e-12) continue
+    const s = Math.sign(cross)
+    if (sign === 0) sign = s
+    else if (s !== sign) return false
+  }
+  return sign === areaSign
+}
+
+/**
+ * If the outline is a sharp convex polygon (triangle…dodecagon), return the
+ * corner vertices. Hearts, darts, and freeform silhouettes return null.
+ */
+export function asPolygonCorners(poly: PlanLoop): PlanLoop | null {
+  const simple = mergeCollinear(simplifyClosed(poly))
+  if (simple.length < POLYGON_MIN_VERTS || simple.length > POLYGON_MAX_VERTS) return null
+  if (!isConvexLoop(simple)) return null
+  return ensureCcw(simple)
+}
+
+export function isPolygonalOutline(poly: PlanLoop): boolean {
+  return asPolygonCorners(poly) !== null
+}
+
 /** Uniform arc-length resample of a closed loop. */
 export function perimeter(poly: PlanLoop): number {
   let perim = 0

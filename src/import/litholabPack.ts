@@ -3,6 +3,8 @@ import type { FrameParams } from '../geom/types.ts'
 
 export const PROJECT_SCHEMA_VERSION = 1
 export const LITHOPHANE_DEPTH_SLACK_MM = 0.4
+/** Minimum XY gap added to LithoLab rabbet width so imported packs are not press-fit. */
+export const PACK_XY_FIT_MM = 0.4
 export const MIN_MOULDING_OVER_RABBET_MM = 8
 
 export interface ProjectExportSettings {
@@ -196,7 +198,7 @@ export function mapPackToFrameParams(json: ProjectJsonV1, current: FrameParams):
   const destW = roundMm(json.export.width)
   const destH = roundMm(json.export.height)
   const border = Math.max(0, json.export.border)
-  const fit = Math.max(0, current.fitClearance)
+  const fit = Math.max(PACK_XY_FIT_MM, current.fitClearance)
   const rabbetWidth = Math.max(0.1, border + fit)
   const rabbetDepth = Math.max(0.1, lithophaneStackHeightMm(json) + LITHOPHANE_DEPTH_SLACK_MM)
 

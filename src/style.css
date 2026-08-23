@@ -66,10 +66,9 @@ body {
   font-size: 0.82rem;
 }
 
-.phase {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+.version {
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
   color: var(--accent);
   border: 1px solid #5a4a32;
   background: #2a2418;

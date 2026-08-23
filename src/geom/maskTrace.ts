@@ -1,4 +1,5 @@
 import {
+  asPolygonCorners,
   ensureCcw,
   largestLoop,
   loopBounds,
@@ -268,12 +269,14 @@ export function sightFromPixelLoops(loops: PlanLoop[], pixelSizeMm: number): Pla
 export function centerFlipY(poly: PlanLoop, width: number, height: number): PlanVertex[] {
   const hx = width / 2
   const hy = height / 2
-  const flipped = poly.map((p) => ({ x: p.x - hx, y: height - p.y - hy }))
-  return smoothRoutedPath(ensureCcw(flipped), 0.35, MASK_MAX_VERTS)
+  const flipped = ensureCcw(poly.map((p) => ({ x: p.x - hx, y: height - p.y - hy })))
+  const corners = asPolygonCorners(flipped)
+  if (corners) return corners
+  return smoothRoutedPath(flipped, 0.35, MASK_MAX_VERTS)
 }
 
 export function sightFromMaskImage(img: RgbaImage, destW: number, destH: number): PlanVertex[] {
-  const loops = extractMaskPolygons(img)
+  const loops = extractMaskPolygons(img, { smoothIters: 0 })
   const trim = trimLargestLoop(loops)
   if (!trim) throw new Error('The mask image has no usable silhouette.')
   return sightFromTrimmed(trim, destW, destH)
