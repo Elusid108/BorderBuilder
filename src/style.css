@@ -165,17 +165,19 @@ input:disabled {
 }
 
 .segmented {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .segmented.is-imported {
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: unset;
 }
 
 .segmented label {
   display: flex;
+  flex: 1 1 calc(50% - 8px);
+  min-width: 5.5rem;
   cursor: pointer;
 }
 

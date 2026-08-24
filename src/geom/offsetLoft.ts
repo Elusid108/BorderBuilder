@@ -33,19 +33,6 @@ function flip(triangles: Triangle[]): void {
   }
 }
 
-function area2(t: Triangle): number {
-  const ux = t.b.x - t.a.x
-  const uy = t.b.y - t.a.y
-  const uz = t.b.z - t.a.z
-  const vx = t.c.x - t.a.x
-  const vy = t.c.y - t.a.y
-  const vz = t.c.z - t.a.z
-  const nx = uy * vz - uz * vy
-  const ny = uz * vx - ux * vz
-  const nz = ux * vy - uy * vx
-  return nx * nx + ny * ny + nz * nz
-}
-
 function quantizeU(u: number): number {
   return Math.round(u * 100) / 100
 }
@@ -121,27 +108,44 @@ function vertexOutward(poly: PlanVertex[], i: number): PlanVertex {
   return { x: ox / len, y: oy / len }
 }
 
-function closestPointOnLoop(p: PlanVertex, loop: PlanVertex[]): PlanVertex {
-  let bestX = loop[0]!.x
-  let bestY = loop[0]!.y
-  let bestD = Infinity
-  for (let i = 0; i < loop.length; i++) {
-    const a = loop[i]!
-    const b = loop[(i + 1) % loop.length]!
-    const abx = b.x - a.x
-    const aby = b.y - a.y
-    const len2 = abx * abx + aby * aby
-    const t = len2 < 1e-12 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.y - a.y) * aby) / len2))
-    const x = a.x + abx * t
-    const y = a.y + aby * t
-    const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y)
-    if (d < bestD) {
-      bestD = d
-      bestX = x
-      bestY = y
+function monotoneArcParams(inner: PlanVertex[], loop: PlanVertex[], spacing: number): number[] | null {
+  const { segs, perim } = loopArcLengths(loop)
+  if (perim < 1e-9) return null
+  const n = inner.length
+  const raw = inner.map((p, i) => closestArcParam(p, loop, segs, vertexOutward(inner, i)))
+  const unwrapped: number[] = [raw[0]!]
+  for (let i = 1; i < n; i++) {
+    let s = raw[i]!
+    const prev = unwrapped[i - 1]!
+    while (s - prev > perim / 2) s -= perim
+    while (prev - s > perim / 2) s += perim
+    unwrapped.push(s)
+  }
+
+  const minAdvance = Math.max(1e-4, Math.min(spacing * 0.02, perim / (n * 8)))
+  for (let i = 1; i < n; i++) {
+    if (unwrapped[i]! < unwrapped[i - 1]! + minAdvance) {
+      unwrapped[i] = unwrapped[i - 1]! + minAdvance
     }
   }
-  return { x: bestX, y: bestY }
+  const span = unwrapped[n - 1]! - unwrapped[0]!
+  const target = perim - minAdvance
+  if (span > target && span > 1e-9) {
+    const s0 = unwrapped[0]!
+    for (let i = 1; i < n; i++) {
+      unwrapped[i] = s0 + ((unwrapped[i]! - s0) / span) * target
+    }
+  }
+  return unwrapped
+}
+
+function mapOntoLoop(inner: PlanVertex[], outer: PlanVertex[], spacing: number): PlanVertex[] {
+  const loop = ensureCcw(removeDegen(outer))
+  if (inner.length < 3 || loop.length < 3) return inner
+  const params = monotoneArcParams(inner, loop, spacing)
+  if (!params) return inner
+  const { segs, perim } = loopArcLengths(loop)
+  return params.map((s) => pointAtArc(loop, segs, perim, s))
 }
 
 /**
@@ -156,20 +160,11 @@ function mergeWalk(
 ): { inner: PlanVertex[]; outer: PlanVertex[] } {
   const loop = ensureCcw(removeDegen(outer))
   if (inner.length < 3 || loop.length < 3) return { inner, outer: inner }
+  const unwrapped = monotoneArcParams(inner, loop, spacing)
+  if (!unwrapped) return { inner, outer: inner }
   const { segs, perim } = loopArcLengths(loop)
-  if (perim < 1e-9) return { inner, outer: inner }
 
   const n = inner.length
-  const raw = inner.map((p, i) => closestArcParam(p, loop, segs, vertexOutward(inner, i)))
-  const unwrapped: number[] = [raw[0]!]
-  for (let i = 1; i < n; i++) {
-    let s = raw[i]!
-    const prev = unwrapped[i - 1]!
-    while (s - prev > perim / 2) s -= perim
-    while (prev - s > perim / 2) s += perim
-    unwrapped.push(s)
-  }
-
   const outInner: PlanVertex[] = []
   const outOuter: PlanVertex[] = []
   const minGap = spacing * 1.5
@@ -195,14 +190,19 @@ function mergeWalk(
 /**
  * Build an organic frame by lofting the moulding profile between robust
  * disk-offsets of the sight outline. The decorative outer still fills
- * concave clefts (heart, gear valleys); intermediate rings — including
- * the rabbet wall — are sampled from the sight onto each isosurface so
- * the pocket keeps concavities that have not yet filled.
+ * concave clefts. When `pocketRing` is set (LithoLab pack + fit), that loop
+ * is the back rabbet wall instead of offset(smoothed sight, rabbetWidth).
  */
 export function sweepOffsetLoft(
   inner: PlanVertex[],
   profile: ProfilePoint[],
-  opts: { spacing?: number; maxVerts?: number; maxGrid?: number } = {},
+  opts: {
+    spacing?: number
+    maxVerts?: number
+    maxGrid?: number
+    pocketRing?: PlanVertex[] | null
+    pocketU?: number
+  } = {},
 ): Mesh {
   if (inner.length < 3) throw new Error('Plan outline needs at least 3 vertices.')
   if (profile.length < 3) throw new Error('Profile needs at least 3 points.')
@@ -213,41 +213,48 @@ export function sweepOffsetLoft(
   const ringPerim = perimeter(sight) + 2 * Math.PI * maxU
   const count = Math.max(96, Math.min(opts.maxVerts ?? 800, Math.round(ringPerim / spacing)))
   const maxGrid = opts.maxGrid ?? 2048
+  const pocketU = opts.pocketU != null ? quantizeU(opts.pocketU) : null
+  const pocketSrc =
+    opts.pocketRing && opts.pocketRing.length >= 3 ? ensureCcw(removeDegen(opts.pocketRing)) : null
 
   const unique = [...new Set(profile.map((p) => quantizeU(p.u)))].sort((a, b) => a - b)
   const cache = new Map<number, PlanVertex[]>()
-  let last = alignRing(sight, count)
-  cache.set(0, last)
+  let front = alignRing(sight, count)
 
   const rings = offsetLoopAtDeltas(sight, unique, { maxGrid, spacing, maxVerts: count })
-  const maxOff = rings.get(quantizeU(maxU))
+  const maxKey = quantizeU(maxU)
+  const maxOff = rings.get(maxKey)
   if (maxOff && maxOff.length >= 3) {
-    const merged = mergeWalk(cache.get(0) ?? last, maxOff, spacing)
-    cache.set(0, merged.inner)
-    cache.set(quantizeU(maxU), merged.outer)
-    last = merged.outer
+    const merged = mergeWalk(front, maxOff, spacing)
+    front = merged.inner
+    cache.set(maxKey, merged.outer)
   }
-  const innerSrc = cache.get(0) ?? last
+  if (pocketSrc && pocketU != null && pocketU > 1e-6 && Math.abs(pocketU - maxKey) > 1e-6) {
+    const mergedPocket = mergeWalk(front, pocketSrc, spacing)
+    const grew = mergedPocket.inner.length !== front.length
+    front = mergedPocket.inner
+    cache.set(pocketU, mergedPocket.outer)
+    if (grew && maxOff && maxOff.length >= 3) {
+      cache.set(maxKey, mapOntoLoop(front, maxOff, spacing))
+    }
+  }
+  cache.set(0, front)
   for (const u of unique) {
     if (Math.abs(u) < 1e-6) {
-      cache.set(u, innerSrc)
+      cache.set(u, front)
       continue
     }
-    if (Math.abs(u - maxU) < 1e-6 && cache.has(quantizeU(maxU))) continue
+    if (cache.has(u) && cache.get(u)!.length === front.length) continue
     const off = rings.get(u)
-    last =
-      off && off.length >= 3 && innerSrc.length >= 3
-        ? innerSrc.map((p) => closestPointOnLoop(p, off))
-        : last
-    cache.set(u, last)
+    cache.set(u, off && off.length >= 3 ? mapOntoLoop(front, off, spacing) : front)
   }
 
   const ringAt = (u: number): PlanVertex[] => {
     const key = quantizeU(u)
-    return cache.get(key) ?? cache.get(0) ?? last
+    return cache.get(key) ?? front
   }
 
-  const n = cache.get(0)?.length ?? count
+  const n = front.length
   const m = profile.length
   const triangles: Triangle[] = []
 
@@ -256,10 +263,8 @@ export function sweepOffsetLoft(
     const p1 = profile[(k + 1) % m]!
     const r0 = ringAt(p0.u)
     const r1 = ringAt(p1.u)
-    const n0 = r0.length
-    const n1 = r1.length
-    if (n0 < 3 || n1 < 3) continue
-    const use = Math.min(n, n0, n1)
+    if (r0.length < 3 || r1.length < 3) continue
+    const use = Math.min(n, r0.length, r1.length)
 
     for (let i = 0; i < use; i++) {
       const i1 = (i + 1) % use
@@ -269,8 +274,9 @@ export function sweepOffsetLoft(
       const b1 = place(r1[i1]!, p1.v)
       const t1: Triangle = { a: a0, b: b0, c: b1 }
       const t2: Triangle = { a: a0, b: b1, c: a1 }
-      if (area2(t1) > 1e-16) triangles.push(t1)
-      if (area2(t2) > 1e-16) triangles.push(t2)
+      // Keep sliver quads — dropping near-zero area faces leaves open edges.
+      triangles.push(t1)
+      triangles.push(t2)
     }
   }
 

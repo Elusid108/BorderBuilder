@@ -1,4 +1,4 @@
-import { DEFAULT_PARAMS, type FrameParams, type ProfileId, type ShapeKind } from '../geom/types.ts'
+import { DEFAULT_PARAMS, isRadiusShape, type FrameParams, type ProfileId, type ShapeKind } from '../geom/types.ts'
 
 function num(input: HTMLInputElement, fallback: number): number {
   const v = input.valueAsNumber
@@ -17,7 +17,7 @@ export function readParams(form: HTMLFormElement): FrameParams {
   return {
     shape,
     sightWidth,
-    sightHeight: shape === 'square' ? sightWidth : sightHeight,
+    sightHeight: isRadiusShape(shape) ? sightWidth : sightHeight,
     mouldingWidth: num(form.querySelector('#moulding-width')!, DEFAULT_PARAMS.mouldingWidth),
     mouldingHeight: num(form.querySelector('#moulding-height')!, DEFAULT_PARAMS.mouldingHeight),
     profile,

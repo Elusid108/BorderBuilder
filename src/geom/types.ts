@@ -26,7 +26,13 @@ export interface Mesh {
   triangles: Triangle[]
 }
 
-export type ShapeKind = 'rectangle' | 'square' | 'imported'
+export type ShapeKind = 'rectangle' | 'hexagon' | 'octagon' | 'circle' | 'imported'
+
+export const RADIUS_SHAPES: readonly ShapeKind[] = ['hexagon', 'octagon', 'circle']
+
+export function isRadiusShape(shape: ShapeKind): boolean {
+  return RADIUS_SHAPES.some((s) => s === shape)
+}
 
 export type ProfileGroup = 'simple' | 'concave' | 'convex' | 'scurve' | 'compound'
 
@@ -58,6 +64,7 @@ export interface RabbetStack {
 
 export interface FrameParams {
   shape: ShapeKind
+  /** Artwork width (mm), or circumradius for hexagon / octagon / circle. */
   sightWidth: number
   sightHeight: number
   mouldingWidth: number
@@ -70,7 +77,7 @@ export interface FrameParams {
   rabbetWidth: number
   rabbetDepth: number
   rabbetStack: RabbetStack
-  /** Extra room in the rabbet: shrinks the glass readout; LithoLab import adds it around the pack. */
+  /** Extra room in the rabbet. Rectangles shrink the glass readout; LithoLab import offsets the pack outline by this gap. */
   fitClearance: number
 }
 
@@ -124,7 +131,7 @@ export const DEFAULT_PARAMS: FrameParams = {
     backing: 1.5,
     clearance: 0.5,
   },
-  fitClearance: 0.4,
+  fitClearance: 0.8,
 }
 
 export const PROFILE_DEFS: readonly ProfileDef[] = [

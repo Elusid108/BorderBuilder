@@ -1,4 +1,4 @@
-import type { DerivedSizes, FrameParams, ValidationIssue } from './types.ts'
+import { isRadiusShape, type DerivedSizes, type FrameParams, type ValidationIssue } from './types.ts'
 
 const MIN_OUTER_WALL = 1.2
 
@@ -25,9 +25,11 @@ export function effectiveRabbetDepth(params: FrameParams): number {
 }
 
 export function effectiveSight(params: FrameParams): { width: number; height: number } {
-  const width = params.sightWidth
-  const height = params.shape === 'square' ? params.sightWidth : params.sightHeight
-  return { width, height }
+  if (isRadiusShape(params.shape)) {
+    const d = 2 * params.sightWidth
+    return { width: d, height: d }
+  }
+  return { width: params.sightWidth, height: params.sightHeight }
 }
 
 export function deriveSizes(params: FrameParams): DerivedSizes {
@@ -54,8 +56,12 @@ export function validateParams(params: FrameParams): ValidationIssue[] {
   const { width, height } = effectiveSight(params)
   const depth = effectiveRabbetDepth(params)
 
-  if (!(width > 0)) issues.push({ field: 'sightWidth', message: 'Artwork width must be positive.' })
-  if (!(height > 0)) issues.push({ field: 'sightHeight', message: 'Artwork height must be positive.' })
+  if (isRadiusShape(params.shape)) {
+    if (!(params.sightWidth > 0)) issues.push({ field: 'sightWidth', message: 'Radius must be positive.' })
+  } else {
+    if (!(width > 0)) issues.push({ field: 'sightWidth', message: 'Artwork width must be positive.' })
+    if (!(height > 0)) issues.push({ field: 'sightHeight', message: 'Artwork height must be positive.' })
+  }
   if (!(params.mouldingWidth > 0)) {
     issues.push({ field: 'mouldingWidth', message: 'Moulding width must be positive.' })
   }

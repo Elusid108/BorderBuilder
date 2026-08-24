@@ -291,13 +291,27 @@ export function sightFromPixelLoops(loops: PlanLoop[], pixelSizeMm: number): Mas
   return traceFromTrimmed(trim, destW, destH)
 }
 
-export function centerFlipY(poly: PlanLoop, width: number, height: number): PlanVertex[] {
+export function centerFlipY(poly: PlanLoop, width: number, height: number, routed = true): PlanVertex[] {
   const hx = width / 2
   const hy = height / 2
   const flipped = ensureCcw(poly.map((p) => ({ x: p.x - hx, y: height - p.y - hy })))
   const corners = asPolygonCorners(flipped)
   if (corners) return corners
+  if (!routed) return flipped
   return smoothRoutedPath(flipped, 0.35, MASK_MAX_VERTS)
+}
+
+/** Mask outer in dest millimetres without routed smoothing — source for the LithoLab pack outline. */
+export function unsmoothedPlanFromMaskImage(img: RgbaImage, destW: number, destH: number): PlanVertex[] {
+  const loops = extractMaskPolygons(img, { smoothIters: 0 })
+  const trim = trimMaskLoops(loops)
+  if (!trim) throw new Error('The mask image has no usable silhouette.')
+  const outer = largestLoop(trim.outers)
+  if (!outer) throw new Error('The mask image has no usable silhouette.')
+  const sx = destW / trim.trimW
+  const sy = destH / trim.trimH
+  const scaled = outer.map((p) => ({ x: p.x * sx, y: p.y * sy }))
+  return centerFlipY(scaled, destW, destH, false)
 }
 
 export function sightFromMaskImage(img: RgbaImage, destW: number, destH: number): MaskTrace {

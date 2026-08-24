@@ -1,5 +1,5 @@
 import { extractPolygonsFromScalar } from './maskTrace.ts'
-import { largestLoop, polygonBounds, smoothRoutedPath, type PlanLoop } from './plan.ts'
+import { ensureCcw, largestLoop, polygonBounds, smoothChaikin, smoothRoutedPath, type PlanLoop } from './plan.ts'
 import type { PlanVertex } from './types.ts'
 
 const INF = 1e20
@@ -10,6 +10,8 @@ export type OffsetOpts = {
   maxGrid?: number
   targetCell?: number
   smoothRouted?: boolean
+  /** Chaikin rounds when `smoothRouted` is false (LithoLab-style pack outline). */
+  smoothIters?: number
   spacing?: number
   maxVerts?: number
 }
@@ -138,7 +140,11 @@ function toWorldAndSmooth(
   opts: OffsetOpts,
 ): PlanLoop[] {
   const world = gridPolys.map((loop) => loop.map((p) => ({ x: ox + p.x * cellSize, y: oy + p.y * cellSize })))
-  if (opts.smoothRouted === false) return world
+  if (opts.smoothRouted === false) {
+    const iters = opts.smoothIters ?? 0
+    if (iters <= 0) return world
+    return world.map((loop) => (loop.length >= 3 ? smoothChaikin(ensureCcw(loop), iters) : loop))
+  }
   const spacing = opts.spacing ?? 0.35
   const maxVerts = opts.maxVerts ?? 800
   return world.map((loop) => smoothRoutedPath(loop, spacing, maxVerts))

@@ -11,7 +11,7 @@ import { buildRectFrame } from './rectFrame.ts'
 import { meshToBinaryStl } from './stl.ts'
 import { DEFAULT_PARAMS, PROFILE_DEFS, type FrameParams, type Mesh, type PlanVertex, type ProfileId } from './types.ts'
 import { inspectMesh } from './validate.ts'
-import { mapPackToFrameParams, PACK_XY_FIT_MM, unpackLitholabPack, type ProjectJsonV1 } from '../import/litholabPack.ts'
+import { mapPackToFrameParams, PACK_XY_FIT_MM, packOutlineFromPlan, pocketRingFromPack, unpackLitholabPack, type ProjectJsonV1 } from '../import/litholabPack.ts'
 
 function assert(cond: boolean, message: string): void {
   if (!cond) throw new Error(message)
@@ -292,10 +292,12 @@ function nearestDist(pt: PlanVertex, pts: PlanVertex[]): number {
   return best
 }
 
-function checkRabbetFollowsSight(sight: PlanVertex[], params: FrameParams, label: string): void {
-  const pocket = offsetLoop(sight, params.rabbetWidth)
-  const outer = offsetLoop(sight, params.mouldingWidth)
-  if (!pocket || pocket.length < 12) throw new Error(`${label}: missing pocket offset`)
+function checkRabbetFollowsPack(sight: PlanVertex[], border: number, fit: number, moulding: number, label: string): void {
+  const pack = packOutlineFromPlan(sight, border)
+  const pocket = pocketRingFromPack(pack, fit)
+  const outer = offsetLoop(sight, moulding)
+  if (pack.length < 12) throw new Error(`${label}: missing pack outline`)
+  if (pocket.length < 12) throw new Error(`${label}: missing pocket ring`)
   if (!outer || outer.length < 12) throw new Error(`${label}: missing outer offset`)
 
   const valleys = pocket.filter((p) => minEdgeDistance(p, outer) > 4)
@@ -304,12 +306,31 @@ function checkRabbetFollowsSight(sight: PlanVertex[], params: FrameParams, label
     `${label}: expected pocket valleys that the outer offset fills, got ${valleys.length}`,
   )
 
-  const mesh = buildFrame({ ...params, shape: 'imported' }, sight)
+  const rw = border + fit
+  const params: FrameParams = {
+    ...DEFAULT_PARAMS,
+    shape: 'imported',
+    sightWidth: 96,
+    sightHeight: 96,
+    mouldingWidth: moulding,
+    mouldingHeight: 15,
+    rabbetWidth: rw,
+    rabbetDepth: 4,
+    fitClearance: fit,
+    profile: 'flat',
+  }
+  const mesh = buildFrame(params, sight, pocket)
   const report = inspectMesh(mesh)
   assert(report.watertight, `${label}: not watertight open=${report.openEdges} nm=${report.nonManifoldEdges}`)
 
-  const wall = pocketWallXY(mesh, sight, params.rabbetWidth)
+  const wall = pocketWallXY(mesh, sight, rw)
   assert(wall.length >= 32, `${label}: too few pocket-wall verts (${wall.length})`)
+
+  let clips = 0
+  for (const p of wall) {
+    if (pointInPoly(p, pack) && minEdgeDistance(p, pack) > 0.7) clips++
+  }
+  assert(clips === 0, `${label}: ${clips} pocket-wall verts clip the pack/border`)
 
   let maxValley = 0
   let minValleyToOuter = Infinity
@@ -321,7 +342,7 @@ function checkRabbetFollowsSight(sight: PlanVertex[], params: FrameParams, label
   }
   assert(
     maxValley < 2,
-    `${label}: pocket wall misses a valley by ${maxValley.toFixed(2)} mm (follows outer blob?)`,
+    `${label}: pocket wall misses a pack valley by ${maxValley.toFixed(2)} mm`,
   )
   assert(
     maxValley < minValleyToOuter * 0.4,
@@ -333,7 +354,12 @@ function checkRabbetFollowsSight(sight: PlanVertex[], params: FrameParams, label
     const d = minEdgeDistance(p, pocket)
     if (d > maxWall) maxWall = d
   }
-  assert(maxWall < 2, `${label}: pocket wall strays ${maxWall.toFixed(2)} mm from offset(sight, rabbetWidth)`)
+  assert(maxWall < 2, `${label}: pocket wall strays ${maxWall.toFixed(2)} mm from pack+fit`)
+
+  const loose = pocketRingFromPack(pack, fit * 2)
+  const rTight = pocket.reduce((s, p) => s + Math.hypot(p.x, p.y), 0) / pocket.length
+  const rLoose = loose.reduce((s, p) => s + Math.hypot(p.x, p.y), 0) / loose.length
+  assert(rLoose > rTight + 0.3, `${label}: larger fit should grow the pack pocket (${rLoose.toFixed(2)} vs ${rTight.toFixed(2)})`)
   console.log(
     `ok  ${label}: ${wall.length} wall verts, valley gap ${maxValley.toFixed(2)} mm, wall error ${maxWall.toFixed(2)} mm`,
   )
@@ -395,9 +421,10 @@ async function checkPackRoundtrip(): Promise<void> {
   assert(mapped.shape === 'imported', 'map: shape should be imported')
   assert(nearly(mapped.sightWidth, 140), 'map: dest width')
   assert(nearly(mapped.sightHeight, 132.6), 'map: dest height')
-  assert(nearly(mapped.rabbetWidth, 3 + Math.max(DEFAULT_PARAMS.fitClearance, PACK_XY_FIT_MM)), 'map: rabbet width = border + max(fit, 0.4)')
+  assert(nearly(mapped.rabbetWidth, 3 + Math.max(DEFAULT_PARAMS.fitClearance, PACK_XY_FIT_MM)), 'map: rabbet width = border + max(fit, 0.8)')
   const tight = mapPackToFrameParams(json, { ...DEFAULT_PARAMS, fitClearance: 0 })
-  assert(nearly(tight.rabbetWidth, 3 + PACK_XY_FIT_MM), 'map: zero fit still gets 0.4 mm XY gap')
+  assert(nearly(tight.rabbetWidth, 3 + PACK_XY_FIT_MM), 'map: zero fit still gets 0.8 mm XY gap')
+  assert(nearly(mapped.fitClearance, PACK_XY_FIT_MM) || mapped.fitClearance >= PACK_XY_FIT_MM, 'map: fit floor 0.8')
   assert(mapped.rabbetDepth > 3.5 && mapped.rabbetDepth < 6, `map: rabbet depth ${mapped.rabbetDepth}`)
   assert(mapped.mouldingHeight > mapped.rabbetDepth, 'map: moulding taller than rabbet')
   assert(!mapped.rabbetStack.enabled, 'map: stack should be off')
@@ -537,10 +564,23 @@ for (const profile of profiles) {
   checkRect({ ...DEFAULT_PARAMS, profile, faceDepth: 1, lipWidth: 0 }, `${profile}-full-no-lip`)
 }
 
-checkRect(
-  { ...DEFAULT_PARAMS, shape: 'square', sightWidth: 80, sightHeight: 999, profile: 'flat' },
-  'square-lock',
-)
+function checkRadiusPreset(shape: FrameParams['shape'], radius: number, label: string): void {
+  const params: FrameParams = { ...DEFAULT_PARAMS, shape, sightWidth: radius, sightHeight: radius, profile: 'flat' }
+  const mesh = buildFrame(params)
+  const report = inspectMesh(mesh)
+  assert(report.triangleCount > 24, `${label}: too few triangles`)
+  assert(report.watertight, `${label}: not watertight open=${report.openEdges} nm=${report.nonManifoldEdges}`)
+  const spanX = report.bounds.max.x - report.bounds.min.x
+  const spanY = report.bounds.max.y - report.bounds.min.y
+  const mw = params.mouldingWidth
+  assert(spanX > 2 * radius + 2 * mw - 8, `${label}: outer width ${spanX.toFixed(2)} too small for r=${radius}`)
+  assert(spanY > 1.4 * radius + 2 * mw - 8, `${label}: outer height ${spanY.toFixed(2)} too small for r=${radius}`)
+  console.log(`ok  ${label}: ${report.triangleCount} tris, ${spanX.toFixed(1)}×${spanY.toFixed(1)} mm`)
+}
+
+checkRadiusPreset('hexagon', 50, 'hexagon-r50')
+checkRadiusPreset('octagon', 50, 'octagon-r50')
+checkRadiusPreset('circle', 50, 'circle-r50')
 
 checkRect(
   {
@@ -589,21 +629,7 @@ assert(dartReport.watertight, `dart: not watertight open=${dartReport.openEdges}
 assert(dartReport.triangleCount > 32, 'dart: too few triangles')
 console.log(`ok  dart-offset-loft: ${dartReport.triangleCount} tris`)
 
-checkRabbetFollowsSight(
-  gearPoly(),
-  {
-    ...DEFAULT_PARAMS,
-    shape: 'imported',
-    sightWidth: 96,
-    sightHeight: 96,
-    mouldingWidth: 20,
-    mouldingHeight: 15,
-    rabbetWidth: 3.4,
-    rabbetDepth: 4,
-    profile: 'flat',
-  },
-  'gear-rabbet-follow',
-)
+checkRabbetFollowsPack(gearPoly(), 3, 0.8, 20, 'gear-pack-rabbet')
 
 const heartSight = heartPoly()
 const heartParams: FrameParams = {
@@ -617,6 +643,17 @@ const heartParams: FrameParams = {
   rabbetDepth: 4,
   profile: 'flat',
 }
+const heartPacked = buildFrame(
+  { ...heartParams, rabbetWidth: 3.8, fitClearance: 0.8 },
+  heartSight,
+  pocketRingFromPack(packOutlineFromPlan(heartSight, 3), 0.8),
+)
+const heartPackedReport = inspectMesh(heartPacked)
+assert(
+  heartPackedReport.watertight,
+  `heart-pack: not watertight open=${heartPackedReport.openEdges} nm=${heartPackedReport.nonManifoldEdges}`,
+)
+console.log(`ok  heart-pack-rabbet: ${heartPackedReport.triangleCount} tris`)
 const heartMesh = buildFrame(heartParams, heartSight)
 const heartReport = inspectMesh(heartMesh)
 assert(heartReport.watertight, `heart: not watertight open=${heartReport.openEdges} nm=${heartReport.nonManifoldEdges}`)

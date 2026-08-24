@@ -26,8 +26,8 @@
           <section class="section">
             <h2>LithoLab pack</h2>
             <p class="hint">
-              Import an STL zip or <code>.litholab</code> file. The mask becomes the opening; export
-              sizes set the artwork and rabbet.
+              Import an STL zip or <code>.litholab</code> file. The mask is the front opening; the
+              back well is the lithophane pack (mask + border) plus fit clearance.
             </p>
             <input id="pack-input" type="file" accept=".zip,.litholab,application/zip" hidden />
             <div class="import-actions">
@@ -45,8 +45,16 @@
                 <span>Rectangle</span>
               </label>
               <label>
-                <input type="radio" name="shape" value="square" />
-                <span>Square</span>
+                <input type="radio" name="shape" value="hexagon" />
+                <span>Hexagon</span>
+              </label>
+              <label>
+                <input type="radio" name="shape" value="octagon" />
+                <span>Octagon</span>
+              </label>
+              <label>
+                <input type="radio" name="shape" value="circle" />
+                <span>Circle</span>
               </label>
               <label id="shape-imported-label" hidden>
                 <input type="radio" name="shape" value="imported" />
@@ -57,10 +65,10 @@
 
           <section class="section">
             <h2>Artwork / sight size</h2>
-            <p class="hint">Visible opening. The frame is sized from this plus moulding width.</p>
+            <p class="hint" id="sight-size-hint">Visible opening. The frame is sized from this plus moulding width.</p>
             <div class="row">
               <label class="field">
-                <span>Width (mm)</span>
+                <span id="sight-width-label">Width (mm)</span>
                 <input id="sight-width" type="number" min="1" step="0.1" />
               </label>
               <label class="field" id="sight-height-field">
@@ -105,9 +113,9 @@
           <section class="section">
             <h2>Rabbet</h2>
             <p class="hint">
-              Notch on the back-inner corner. Width is how far the pocket stands out from the
-              opening; depth is how deep. On LithoLab imports the pocket follows the lithophane
-              (mask + border), not a simplified outer shape.
+              Notch on the back-inner corner. Width is lip overlap on the artwork; depth is the
+              pocket. LithoLab imports keep the front opening on the mask; the back well follows the
+              lithophane border plus fit clearance.
             </p>
             <div class="row">
               <label class="field">
@@ -150,8 +158,9 @@
               <input id="fit-clearance" type="number" min="0" step="0.1" />
             </label>
             <p class="hint">
-              Rectangles: shrinks the glass-size readout. LithoLab import: extra room around the
-              lithophane + border in the rabbet (at least 0.4 mm), following that outline.
+              Rectangles: shrinks the glass-size readout. LithoLab import: gap around the lithophane
+              (mask + border) in the back rabbet — tweak this if a print is tight (minimum 0.8 mm on
+              import).
             </p>
           </section>
 

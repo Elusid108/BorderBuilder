@@ -1,14 +1,35 @@
 import { deriveSizes, maxLipWidth, validateParams } from './geom/derived.ts'
 import { buildFrame, downloadName, frameSummary, importedFrameSummary } from './geom/frame.ts'
-import { extractMaskPolygons, sightFromMaskImage, sightFromPixelLoops } from './geom/maskTrace.ts'
+import {
+  extractMaskPolygons,
+  sightFromMaskImage,
+  sightFromPixelLoops,
+  unsmoothedPlanFromMaskImage,
+} from './geom/maskTrace.ts'
 import { compositeArtworkRgba, rgbaToPngBlob } from './preview/artwork.ts'
 import { buildProfile } from './geom/profiles.ts'
 import { downloadStl, meshToBinaryStl } from './geom/stl.ts'
-import { DEFAULT_PARAMS, PROFILE_DEFS, PROFILE_GROUPS, type FrameParams, type Mesh, type PlanVertex } from './geom/types.ts'
+import {
+  DEFAULT_PARAMS,
+  PROFILE_DEFS,
+  PROFILE_GROUPS,
+  isRadiusShape,
+  type FrameParams,
+  type Mesh,
+  type PlanVertex,
+} from './geom/types.ts'
 import { isPolygonalOutline } from './geom/plan.ts'
 import { inspectMesh } from './geom/validate.ts'
 import { rgbaFromBlob } from './import/imageData.ts'
-import { mapPackToFrameParams, silhouetteSizeMm, unpackLitholabPack } from './import/litholabPack.ts'
+import {
+  MIN_MOULDING_OVER_RABBET_MM,
+  PACK_XY_FIT_MM,
+  mapPackToFrameParams,
+  packOutlineFromPlan,
+  pocketRingFromPack,
+  silhouetteSizeMm,
+  unpackLitholabPack,
+} from './import/litholabPack.ts'
 import { FrameViewer } from './preview/viewer.ts'
 import { readParams, writeParams } from './ui/params.ts'
 import { renderProfileSketch } from './ui/profileSketch.ts'
@@ -20,6 +41,8 @@ interface ImportState {
   sourceFile: string
   sight: PlanVertex[]
   holes: PlanVertex[][]
+  packOutline: PlanVertex[]
+  packBorder: number
   silhouetteWidth: number
   silhouetteHeight: number
   artworkUrl: string | null
@@ -43,6 +66,8 @@ const heightInput = document.querySelector<HTMLInputElement>('#sight-height')
 const widthInput = document.querySelector<HTMLInputElement>('#sight-width')
 const heightField = document.querySelector<HTMLElement>('#sight-height-field')
 const widthField = widthInput?.closest('.field')
+const widthLabel = document.querySelector<HTMLElement>('#sight-width-label')
+const sightSizeHint = document.querySelector<HTMLElement>('#sight-size-hint')
 const stackPanel = document.querySelector<HTMLElement>('#stack-fields')
 const depthInput = document.querySelector<HTMLInputElement>('#rabbet-depth')
 const stackEnabled = document.querySelector<HTMLInputElement>('#stack-enabled')
@@ -86,13 +111,21 @@ let timer = 0
 function syncShapeLock(): void {
   const shape = form.querySelector<HTMLInputElement>('input[name="shape"]:checked')?.value
   const importedOn = shape === 'imported'
-  const square = shape === 'square'
+  const radius = isRadiusShape((shape ?? 'rectangle') as FrameParams['shape'])
   if (widthInput) widthInput.disabled = importedOn
-  if (heightInput) heightInput.disabled = importedOn || square
+  if (heightInput) heightInput.disabled = importedOn || radius
   widthField?.classList.toggle('is-locked', importedOn)
-  heightField?.classList.toggle('is-locked', importedOn || square)
-  if (square && !importedOn && heightInput && widthInput) {
-    heightInput.value = widthInput.value
+  heightField?.classList.toggle('is-locked', importedOn)
+  if (heightField) heightField.hidden = radius && !importedOn
+  if (widthLabel) widthLabel.textContent = radius && !importedOn ? 'Radius (mm)' : 'Width (mm)'
+  if (sightSizeHint) {
+    sightSizeHint.textContent = radius && !importedOn
+      ? 'Opening circumradius (centre to vertex). Height matches the bounding diameter.'
+      : 'Visible opening. The frame is sized from this plus moulding width.'
+  }
+  if (radius && !importedOn && heightInput && widthInput) {
+    const r = widthInput.valueAsNumber
+    if (Number.isFinite(r)) heightInput.value = formatMm(2 * r)
   }
 }
 
@@ -204,6 +237,26 @@ function syncArtwork(params: FrameParams): void {
   })
 }
 
+function importedPocket(params: FrameParams): PlanVertex[] | null {
+  if (!imported?.packOutline.length) return null
+  return pocketRingFromPack(imported.packOutline, params.fitClearance)
+}
+
+function syncImportedFit(params: FrameParams): FrameParams {
+  if (!imported) return params
+  const fit = Math.max(PACK_XY_FIT_MM, params.fitClearance)
+  const rw = Math.max(0.1, imported.packBorder + fit)
+  let mouldingWidth = params.mouldingWidth
+  if (mouldingWidth <= rw) mouldingWidth = rw + MIN_MOULDING_OVER_RABBET_MM
+  const rabbet = form.querySelector<HTMLInputElement>('#rabbet-width')
+  const fitInput = form.querySelector<HTMLInputElement>('#fit-clearance')
+  const moulding = form.querySelector<HTMLInputElement>('#moulding-width')
+  if (fitInput && Math.abs(params.fitClearance - fit) > 1e-6) fitInput.value = formatMm(fit)
+  if (rabbet && Math.abs(params.rabbetWidth - rw) > 1e-6) rabbet.value = formatMm(rw)
+  if (moulding && Math.abs(params.mouldingWidth - mouldingWidth) > 1e-6) moulding.value = formatMm(mouldingWidth)
+  return { ...params, fitClearance: fit, rabbetWidth: rw, mouldingWidth }
+}
+
 function rebuild(fitNote?: string): void {
   const shape = form.querySelector<HTMLInputElement>('input[name="shape"]:checked')?.value
   if (shape !== 'imported' && imported) clearImport(false)
@@ -211,7 +264,8 @@ function rebuild(fitNote?: string): void {
   syncShapeLock()
   syncStackLock()
   syncFaceSliders()
-  const params = readParams(form)
+  let params = readParams(form)
+  if (imported && params.shape === 'imported') params = syncImportedFit(params)
   const issues = validateParams(params)
   updateReadouts(params)
 
@@ -227,9 +281,13 @@ function rebuild(fitNote?: string): void {
   }
 
   try {
-    const mesh = buildFrame(params, imported?.sight)
+    const mesh = buildFrame(params, imported?.sight, importedPocket(params))
     const report = inspectMesh(mesh)
-    viewer.setMesh(mesh, { smooth: params.shape === 'imported' && !isPolygonalOutline(imported?.sight ?? []) })
+    viewer.setMesh(mesh, {
+      smooth:
+        params.shape === 'circle' ||
+        (params.shape === 'imported' && !isPolygonalOutline(imported?.sight ?? [])),
+    })
     syncArtwork(params)
     lastMesh = mesh
     lastParams = params
@@ -269,20 +327,25 @@ async function importPackFile(file: File): Promise<void> {
   let maskedImg = assets.maskedPngBlob ? await rgbaFromBlob(assets.maskedPngBlob) : null
   let sight: PlanVertex[]
   let holes: PlanVertex[][]
+  let packSource: PlanVertex[]
   if (assets.maskBlob) {
-    const trace = sightFromMaskImage(await rgbaFromBlob(assets.maskBlob), destW, destH)
+    const maskImg = await rgbaFromBlob(assets.maskBlob)
+    const trace = sightFromMaskImage(maskImg, destW, destH)
     sight = trace.sight
     holes = trace.holes
+    packSource = unsmoothedPlanFromMaskImage(maskImg, destW, destH)
   } else if (maskedImg) {
-    const trace = sightFromPixelLoops(
-      extractMaskPolygons(maskedImg, { smoothIters: 0 }),
-      assets.json.export.pixelSizeMm || 0.2,
-    )
+    const loops = extractMaskPolygons(maskedImg, { smoothIters: 0 })
+    const trace = sightFromPixelLoops(loops, assets.json.export.pixelSizeMm || 0.2)
     sight = trace.sight
     holes = trace.holes
+    packSource = sight
   } else {
     throw new Error('This pack has no mask or original-masked.png to trace.')
   }
+
+  const packBorder = Math.max(0, assets.json.export.border)
+  const packOutline = packOutlineFromPlan(packSource, packBorder)
 
   const sil = silhouetteSizeMm(
     assets.json,
@@ -307,6 +370,8 @@ async function importPackFile(file: File): Promise<void> {
     sourceFile: file.name,
     sight,
     holes,
+    packOutline,
+    packBorder,
     silhouetteWidth: sil.width,
     silhouetteHeight: sil.height,
     artworkUrl,

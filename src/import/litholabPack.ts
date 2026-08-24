@@ -1,10 +1,11 @@
 import JSZip from 'jszip'
-import type { FrameParams } from '../geom/types.ts'
+import { offsetLoop } from '../geom/offset.ts'
+import type { FrameParams, PlanVertex } from '../geom/types.ts'
 
 export const PROJECT_SCHEMA_VERSION = 1
 export const LITHOPHANE_DEPTH_SLACK_MM = 0.4
-/** Minimum XY gap added to LithoLab rabbet width so imported packs are not press-fit. */
-export const PACK_XY_FIT_MM = 0.4
+/** Minimum XY gap added around the LithoLab pack so imported frames are not press-fit. */
+export const PACK_XY_FIT_MM = 0.8
 export const MIN_MOULDING_OVER_RABBET_MM = 8
 
 export interface ProjectExportSettings {
@@ -217,12 +218,40 @@ export function mapPackToFrameParams(json: ProjectJsonV1, current: FrameParams):
     shape: 'imported',
     sightWidth: destW,
     sightHeight: destH,
+    fitClearance: fit,
     rabbetWidth,
     rabbetDepth,
     rabbetStack: { ...current.rabbetStack, enabled: false },
     mouldingWidth,
     mouldingHeight,
   }
+}
+
+/** LithoLab pack outer (magenta): disk offset of the mask with Chaikin, not a routed spline. */
+export function packOutlineFromPlan(maskPlan: PlanVertex[], borderMm: number): PlanVertex[] {
+  if (!(borderMm > 1e-9)) return maskPlan
+  return (
+    offsetLoop(maskPlan, borderMm, {
+      maxGrid: 2048,
+      cellSize: Math.max(borderMm / 12, 1e-6),
+      smoothRouted: false,
+      smoothIters: 4,
+    }) ?? maskPlan
+  )
+}
+
+/** Back rabbet wall: pack outline plus fit clearance. */
+export function pocketRingFromPack(packOutline: PlanVertex[], fitMm: number): PlanVertex[] {
+  const fit = Math.max(PACK_XY_FIT_MM, fitMm)
+  if (!(fit > 1e-9)) return packOutline
+  return (
+    offsetLoop(packOutline, fit, {
+      maxGrid: 2048,
+      cellSize: Math.max(fit / 12, 1e-6),
+      smoothRouted: false,
+      smoothIters: 2,
+    }) ?? packOutline
+  )
 }
 
 export function silhouetteSizeMm(
