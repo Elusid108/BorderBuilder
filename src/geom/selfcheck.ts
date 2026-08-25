@@ -365,6 +365,77 @@ function checkRabbetFollowsPack(sight: PlanVertex[], border: number, fit: number
   )
 }
 
+/** Front-face inner-wall vertices (u=0 ring at z≈moulding height, matched to the shelf at z≈rabbet depth). */
+function frontInnerXY(mesh: Mesh, mouldingHeight: number, rabbetDepth: number): PlanVertex[] {
+  const top = new Map<string, PlanVertex>()
+  const shelf = new Set<string>()
+  const keyOf = (x: number, y: number) => `${Math.round(x * 50)}|${Math.round(y * 50)}`
+  for (const t of mesh.triangles) {
+    for (const v of [t.a, t.b, t.c]) {
+      const key = keyOf(v.x, v.y)
+      if (Math.abs(v.z - mouldingHeight) <= 0.08) {
+        if (!top.has(key)) top.set(key, { x: v.x, y: v.y })
+      }
+      if (Math.abs(v.z - rabbetDepth) <= 0.08) shelf.add(key)
+    }
+  }
+  const out: PlanVertex[] = []
+  for (const [key, pt] of top) {
+    if (shelf.has(key)) out.push(pt)
+  }
+  return out
+}
+
+function checkFrontFollowsMask(sight: PlanVertex[], border: number, fit: number, moulding: number, label: string): void {
+  const pack = packOutlineFromPlan(sight, border)
+  const pocket = pocketRingFromPack(pack, fit)
+  const rw = border + fit
+  const mh = 15
+  const rd = 4
+  const params: FrameParams = {
+    ...DEFAULT_PARAMS,
+    shape: 'imported',
+    sightWidth: 96,
+    sightHeight: 96,
+    mouldingWidth: moulding,
+    mouldingHeight: mh,
+    rabbetWidth: rw,
+    rabbetDepth: rd,
+    fitClearance: fit,
+    profile: 'flat',
+  }
+  const mesh = buildFrame(params, sight, pocket)
+  const report = inspectMesh(mesh)
+  assert(report.watertight, `${label}: not watertight open=${report.openEdges} nm=${report.nonManifoldEdges}`)
+
+  const rim = frontInnerXY(mesh, mh, rd)
+  assert(rim.length >= 32, `${label}: too few front-inner verts (${rim.length})`)
+
+  const ringLimit = border * 0.4
+  let maxMask = 0
+  let minPack = Infinity
+  let outsidePack = 0
+  let inBorderRing = 0
+  for (const p of rim) {
+    const toMask = minEdgeDistance(p, sight)
+    if (toMask > maxMask) maxMask = toMask
+    const toPack = minEdgeDistance(p, pack)
+    if (toPack < minPack) minPack = toPack
+    if (!pointInPoly(p, pack)) outsidePack++
+    if (toPack < ringLimit) inBorderRing++
+  }
+  assert(maxMask < 0.6, `${label}: front inner strays ${maxMask.toFixed(2)} mm from the unsmoothed mask`)
+  assert(outsidePack === 0, `${label}: ${outsidePack} front-inner verts sit outside the pack`)
+  assert(inBorderRing === 0, `${label}: ${inBorderRing} front-inner verts sit in the pack border ring`)
+  assert(
+    minPack > ringLimit,
+    `${label}: front inner is ${minPack.toFixed(2)} mm from the pack (expected ~${border} mm, inside the plate)`,
+  )
+  console.log(
+    `ok  ${label}: ${rim.length} front verts, mask error ${maxMask.toFixed(2)} mm, pack clearance ${minPack.toFixed(2)} mm`,
+  )
+}
+
 function intrusionCount(mesh: Mesh, sight: PlanVertex[], zMin: number, inset: number): number {
   let n = 0
   for (const t of mesh.triangles) {
@@ -630,6 +701,7 @@ assert(dartReport.triangleCount > 32, 'dart: too few triangles')
 console.log(`ok  dart-offset-loft: ${dartReport.triangleCount} tris`)
 
 checkRabbetFollowsPack(gearPoly(), 3, 0.8, 20, 'gear-pack-rabbet')
+checkFrontFollowsMask(gearPoly(), 3, 0.8, 20, 'gear-front-mask')
 
 const heartSight = heartPoly()
 const heartParams: FrameParams = {
@@ -654,6 +726,7 @@ assert(
   `heart-pack: not watertight open=${heartPackedReport.openEdges} nm=${heartPackedReport.nonManifoldEdges}`,
 )
 console.log(`ok  heart-pack-rabbet: ${heartPackedReport.triangleCount} tris`)
+checkFrontFollowsMask(heartSight, 3, 0.8, 20, 'heart-front-mask')
 const heartMesh = buildFrame(heartParams, heartSight)
 const heartReport = inspectMesh(heartMesh)
 assert(heartReport.watertight, `heart: not watertight open=${heartReport.openEdges} nm=${heartReport.nonManifoldEdges}`)

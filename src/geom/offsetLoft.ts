@@ -158,29 +158,38 @@ function mergeWalk(
   outer: PlanVertex[],
   spacing: number,
 ): { inner: PlanVertex[]; outer: PlanVertex[] } {
+  const innerLoop = ensureCcw(removeDegen(inner))
   const loop = ensureCcw(removeDegen(outer))
-  if (inner.length < 3 || loop.length < 3) return { inner, outer: inner }
-  const unwrapped = monotoneArcParams(inner, loop, spacing)
-  if (!unwrapped) return { inner, outer: inner }
+  if (innerLoop.length < 3 || loop.length < 3) return { inner: innerLoop, outer: innerLoop }
+  const unwrapped = monotoneArcParams(innerLoop, loop, spacing)
+  if (!unwrapped) return { inner: innerLoop, outer: innerLoop }
   const { segs, perim } = loopArcLengths(loop)
+  const innerArc = loopArcLengths(innerLoop)
 
-  const n = inner.length
+  const n = innerLoop.length
+  const innerS: number[] = [0]
+  let acc = 0
+  for (let i = 0; i < n - 1; i++) {
+    acc += innerArc.segs[i] ?? 0
+    innerS.push(acc)
+  }
+
   const outInner: PlanVertex[] = []
   const outOuter: PlanVertex[] = []
   const minGap = spacing * 1.5
   for (let i = 0; i < n; i++) {
-    outInner.push(inner[i]!)
+    outInner.push(innerLoop[i]!)
     outOuter.push(pointAtArc(loop, segs, perim, unwrapped[i]!))
     const t0 = unwrapped[i]!
     const t1 = i + 1 < n ? unwrapped[i + 1]! : unwrapped[0]! + perim
     const gap = t1 - t0
     if (gap <= minGap) continue
-    const a = inner[i]!
-    const b = inner[(i + 1) % n]!
+    const sA = innerS[i]!
+    const sB = i + 1 < n ? innerS[i + 1]! : innerArc.perim
     const nIns = Math.max(1, Math.round(gap / spacing) - 1)
     for (let k = 1; k <= nIns; k++) {
       const f = k / (nIns + 1)
-      outInner.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f })
+      outInner.push(pointAtArc(innerLoop, innerArc.segs, innerArc.perim, sA + (sB - sA) * f))
       outOuter.push(pointAtArc(loop, segs, perim, t0 + gap * f))
     }
   }
@@ -190,8 +199,9 @@ function mergeWalk(
 /**
  * Build an organic frame by lofting the moulding profile between robust
  * disk-offsets of the sight outline. The decorative outer still fills
- * concave clefts. When `pocketRing` is set (LithoLab pack + fit), that loop
- * is the back rabbet wall instead of offset(smoothed sight, rabbetWidth).
+ * concave clefts. `u = 0` stays on the plate (mask) polyline. When
+ * `pocketRing` is set (LithoLab pack + fit), that loop is the back rabbet
+ * wall instead of offset(smoothed sight, rabbetWidth).
  */
 export function sweepOffsetLoft(
   inner: PlanVertex[],
@@ -219,23 +229,25 @@ export function sweepOffsetLoft(
 
   const unique = [...new Set(profile.map((p) => quantizeU(p.u)))].sort((a, b) => a - b)
   const cache = new Map<number, PlanVertex[]>()
-  let front = alignRing(sight, count)
+  const maskRing = alignRing(sight, count)
+  let front = maskRing
 
   const rings = offsetLoopAtDeltas(sight, unique, { maxGrid, spacing, maxVerts: count })
   const maxKey = quantizeU(maxU)
   const maxOff = rings.get(maxKey)
   if (maxOff && maxOff.length >= 3) {
-    const merged = mergeWalk(front, maxOff, spacing)
+    const merged = mergeWalk(maskRing, maxOff, spacing)
     front = merged.inner
     cache.set(maxKey, merged.outer)
   }
   if (pocketSrc && pocketU != null && pocketU > 1e-6 && Math.abs(pocketU - maxKey) > 1e-6) {
     const mergedPocket = mergeWalk(front, pocketSrc, spacing)
-    const grew = mergedPocket.inner.length !== front.length
-    front = mergedPocket.inner
     cache.set(pocketU, mergedPocket.outer)
-    if (grew && maxOff && maxOff.length >= 3) {
-      cache.set(maxKey, mapOntoLoop(front, maxOff, spacing))
+    if (mergedPocket.inner.length !== front.length) {
+      front = mergedPocket.inner
+      if (maxOff && maxOff.length >= 3) {
+        cache.set(maxKey, mapOntoLoop(front, maxOff, spacing))
+      }
     }
   }
   cache.set(0, front)

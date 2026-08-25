@@ -261,9 +261,9 @@ export function trimMaskLoops(loops: PlanLoop[]): TrimmedMask | null {
   return { outers: classified.outers, holes: classified.holes, trimW, trimH }
 }
 
-function mapLoop(poly: PlanLoop, sx: number, sy: number, destW: number, destH: number): PlanVertex[] {
+function mapLoop(poly: PlanLoop, sx: number, sy: number, destW: number, destH: number, routed = true): PlanVertex[] {
   const scaled = poly.map((p) => ({ x: p.x * sx, y: p.y * sy }))
-  return centerFlipY(scaled, destW, destH)
+  return centerFlipY(scaled, destW, destH, routed)
 }
 
 /**
@@ -301,17 +301,21 @@ export function centerFlipY(poly: PlanLoop, width: number, height: number, route
   return smoothRoutedPath(flipped, 0.35, MASK_MAX_VERTS)
 }
 
-/** Mask outer in dest millimetres without routed smoothing — source for the LithoLab pack outline. */
-export function unsmoothedPlanFromMaskImage(img: RgbaImage, destW: number, destH: number): PlanVertex[] {
-  const loops = extractMaskPolygons(img, { smoothIters: 0 })
-  const trim = trimMaskLoops(loops)
-  if (!trim) throw new Error('The mask image has no usable silhouette.')
+/** Plate outline in dest millimetres: marching squares, no routed spline. */
+export function platePlanFromTrimmed(trim: TrimmedMask, destW: number, destH: number): PlanVertex[] {
   const outer = largestLoop(trim.outers)
   if (!outer) throw new Error('The mask image has no usable silhouette.')
   const sx = destW / trim.trimW
   const sy = destH / trim.trimH
-  const scaled = outer.map((p) => ({ x: p.x * sx, y: p.y * sy }))
-  return centerFlipY(scaled, destW, destH, false)
+  return mapLoop(outer, sx, sy, destW, destH, false)
+}
+
+/** Mask outer in dest millimetres without routed smoothing — plate + pack source. */
+export function unsmoothedPlanFromMaskImage(img: RgbaImage, destW: number, destH: number): PlanVertex[] {
+  const loops = extractMaskPolygons(img, { smoothIters: 0 })
+  const trim = trimMaskLoops(loops)
+  if (!trim) throw new Error('The mask image has no usable silhouette.')
+  return platePlanFromTrimmed(trim, destW, destH)
 }
 
 export function sightFromMaskImage(img: RgbaImage, destW: number, destH: number): MaskTrace {

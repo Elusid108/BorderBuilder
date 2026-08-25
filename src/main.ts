@@ -4,6 +4,8 @@ import {
   extractMaskPolygons,
   sightFromMaskImage,
   sightFromPixelLoops,
+  platePlanFromTrimmed,
+  trimMaskLoops,
   unsmoothedPlanFromMaskImage,
 } from './geom/maskTrace.ts'
 import { compositeArtworkRgba, rgbaToPngBlob } from './preview/artwork.ts'
@@ -326,26 +328,29 @@ async function importPackFile(file: File): Promise<void> {
 
   let maskedImg = assets.maskedPngBlob ? await rgbaFromBlob(assets.maskedPngBlob) : null
   let sight: PlanVertex[]
+  let artSight: PlanVertex[]
   let holes: PlanVertex[][]
-  let packSource: PlanVertex[]
   if (assets.maskBlob) {
     const maskImg = await rgbaFromBlob(assets.maskBlob)
     const trace = sightFromMaskImage(maskImg, destW, destH)
-    sight = trace.sight
     holes = trace.holes
-    packSource = unsmoothedPlanFromMaskImage(maskImg, destW, destH)
+    artSight = trace.sight
+    sight = unsmoothedPlanFromMaskImage(maskImg, destW, destH)
   } else if (maskedImg) {
+    const px = assets.json.export.pixelSizeMm || 0.2
     const loops = extractMaskPolygons(maskedImg, { smoothIters: 0 })
-    const trace = sightFromPixelLoops(loops, assets.json.export.pixelSizeMm || 0.2)
-    sight = trace.sight
+    const trace = sightFromPixelLoops(loops, px)
     holes = trace.holes
-    packSource = sight
+    artSight = trace.sight
+    const trim = trimMaskLoops(loops)
+    if (!trim) throw new Error('Could not trace a silhouette from the masked image.')
+    sight = platePlanFromTrimmed(trim, trim.trimW * px, trim.trimH * px)
   } else {
     throw new Error('This pack has no mask or original-masked.png to trace.')
   }
 
   const packBorder = Math.max(0, assets.json.export.border)
-  const packOutline = packOutlineFromPlan(packSource, packBorder)
+  const packOutline = packOutlineFromPlan(sight, packBorder)
 
   const sil = silhouetteSizeMm(
     assets.json,
@@ -358,7 +363,7 @@ async function importPackFile(file: File): Promise<void> {
     const composited = compositeArtworkRgba(maskedImg, {
       widthMm: sil.width,
       heightMm: sil.height,
-      sight,
+      sight: artSight,
       holes,
     })
     artworkUrl = URL.createObjectURL(await rgbaToPngBlob(composited))
