@@ -7,7 +7,7 @@ import { sweepOffsetLoft } from './offsetLoft.ts'
 import { asPolygonCorners, classifyPolygonLoops, ensureCcw, hypot, isPolygonalOutline, loopBounds, minEdgeDistance, pointInPoly, sub } from './plan.ts'
 import { compositeArtworkRgba } from '../preview/artwork.ts'
 import { buildProfile } from './profiles.ts'
-import { buildRectFrame } from './rectFrame.ts'
+import { buildRectFrame, presetOuterLoop, suggestedImportedOuter } from './rectFrame.ts'
 import { meshToBinaryStl } from './stl.ts'
 import { DEFAULT_PARAMS, PROFILE_DEFS, type FrameParams, type Mesh, type PlanVertex, type ProfileId } from './types.ts'
 import { inspectMesh } from './validate.ts'
@@ -349,19 +349,27 @@ function checkRabbetFollowsPack(sight: PlanVertex[], border: number, fit: number
     `${label}: valley gap ${maxValley.toFixed(2)} mm is too close to the outer offset (${minValleyToOuter.toFixed(2)} mm)`,
   )
 
+  const loose = pocketRingFromPack(pack, fit * 2)
+  const rTight = pocket.reduce((s, p) => s + Math.hypot(p.x, p.y), 0) / pocket.length
+  const rLoose = loose.reduce((s, p) => s + Math.hypot(p.x, p.y), 0) / loose.length
+  assert(rLoose > rTight + 0.3, `${label}: larger fit should grow the pack pocket (${rLoose.toFixed(2)} vs ${rTight.toFixed(2)})`)
+
+  let maxFitErr = 0
+  for (const p of pocket) {
+    const err = Math.abs(minEdgeDistance(p, pack) - fit)
+    if (err > maxFitErr) maxFitErr = err
+  }
+  assert(maxFitErr < 0.15, `${label}: pack-parallel gap error ${maxFitErr.toFixed(2)} mm (want ${fit} mm)`)
+
   let maxWall = 0
   for (const p of wall) {
     const d = minEdgeDistance(p, pocket)
     if (d > maxWall) maxWall = d
   }
-  assert(maxWall < 2, `${label}: pocket wall strays ${maxWall.toFixed(2)} mm from pack+fit`)
+  assert(maxWall < 0.25, `${label}: pocket wall strays ${maxWall.toFixed(2)} mm from pack+fit`)
 
-  const loose = pocketRingFromPack(pack, fit * 2)
-  const rTight = pocket.reduce((s, p) => s + Math.hypot(p.x, p.y), 0) / pocket.length
-  const rLoose = loose.reduce((s, p) => s + Math.hypot(p.x, p.y), 0) / loose.length
-  assert(rLoose > rTight + 0.3, `${label}: larger fit should grow the pack pocket (${rLoose.toFixed(2)} vs ${rTight.toFixed(2)})`)
   console.log(
-    `ok  ${label}: ${wall.length} wall verts, valley gap ${maxValley.toFixed(2)} mm, wall error ${maxWall.toFixed(2)} mm`,
+    `ok  ${label}: ${wall.length} wall verts, valley gap ${maxValley.toFixed(2)} mm, wall error ${maxWall.toFixed(2)} mm, fit error ${maxFitErr.toFixed(2)} mm`,
   )
 }
 
@@ -434,6 +442,103 @@ function checkFrontFollowsMask(sight: PlanVertex[], border: number, fit: number,
   console.log(
     `ok  ${label}: ${rim.length} front verts, mask error ${maxMask.toFixed(2)} mm, pack clearance ${minPack.toFixed(2)} mm`,
   )
+}
+
+function checkImportedGeometricOuter(
+  sight: PlanVertex[],
+  shape: FrameParams['shape'],
+  border: number,
+  fit: number,
+  moulding: number,
+  label: string,
+): void {
+  const pack = packOutlineFromPlan(sight, border)
+  const pocket = pocketRingFromPack(pack, fit)
+  const suggested = suggestedImportedOuter(sight, moulding, shape)
+  const rw = border + fit
+  const params: FrameParams = {
+    ...DEFAULT_PARAMS,
+    shape,
+    sightWidth: suggested.sightWidth,
+    sightHeight: suggested.sightHeight,
+    mouldingWidth: moulding,
+    mouldingHeight: 15,
+    rabbetWidth: rw,
+    rabbetDepth: 4,
+    fitClearance: fit,
+    profile: 'flat',
+  }
+  const mesh = buildFrame(params, sight, pocket)
+  const report = inspectMesh(mesh)
+  assert(report.watertight, `${label}: not watertight open=${report.openEdges} nm=${report.nonManifoldEdges}`)
+  const spanX = report.bounds.max.x - report.bounds.min.x
+  const spanY = report.bounds.max.y - report.bounds.min.y
+  const outer = presetOuterLoop(params)
+  const ob = loopBounds(outer)
+  assert(nearly(spanX, ob.maxX - ob.minX, 1.5), `${label}: outer width ${spanX.toFixed(2)} != ${ob.maxX - ob.minX}`)
+  assert(nearly(spanY, ob.maxY - ob.minY, 1.5), `${label}: outer height ${spanY.toFixed(2)} != ${ob.maxY - ob.minY}`)
+  const rim = frontInnerXY(mesh, 15, 4)
+  assert(rim.length >= 16, `${label}: too few front-inner verts (${rim.length})`)
+  let maxMask = 0
+  let minR = Infinity
+  let maxR = 0
+  for (const p of rim) {
+    const d = minEdgeDistance(p, sight)
+    if (d > maxMask) maxMask = d
+    const r = Math.hypot(p.x, p.y)
+    if (r < minR) minR = r
+    if (r > maxR) maxR = r
+  }
+  assert(maxMask < 0.6, `${label}: front inner strays ${maxMask.toFixed(2)} mm from the imported opening`)
+  if (shape === 'circle') {
+    assert(
+      maxR - minR > 8,
+      `${label}: inner opening looks circular (radial span ${ (maxR - minR).toFixed(2) } mm) instead of the imported silhouette`,
+    )
+  }
+  if (shape === 'hexagon' || shape === 'octagon') {
+    checkEvenPresetOuter(mesh, outer, label)
+  }
+  console.log(
+    `ok  ${label}: ${report.triangleCount} tris, outer ${spanX.toFixed(1)}×${spanY.toFixed(1)} mm, mask error ${maxMask.toFixed(2)} mm`,
+  )
+}
+
+function checkEvenPresetOuter(mesh: Mesh, expected: PlanVertex[], label: string): void {
+  const n = expected.length
+  const snapped: PlanVertex[] = []
+  for (const c of expected) {
+    let best = Infinity
+    let bestP = c
+    for (const t of mesh.triangles) {
+      for (const v of [t.a, t.b, t.c]) {
+        if (v.z > 0.2) continue
+        const d = Math.hypot(v.x - c.x, v.y - c.y)
+        if (d < best) {
+          best = d
+          bestP = { x: v.x, y: v.y }
+        }
+      }
+    }
+    assert(
+      best < 0.4,
+      `${label}: missing outer corner at (${c.x.toFixed(1)}, ${c.y.toFixed(1)}) d=${best.toFixed(2)}`,
+    )
+    snapped.push(bestP)
+  }
+  const lens: number[] = []
+  for (let i = 0; i < n; i++) {
+    const a = snapped[i]!
+    const b = snapped[(i + 1) % n]!
+    lens.push(Math.hypot(b.x - a.x, b.y - a.y))
+  }
+  const mean = lens.reduce((a, b) => a + b, 0) / n
+  for (let i = 0; i < n; i++) {
+    assert(
+      Math.abs(lens[i]! - mean) < 0.3,
+      `${label}: side ${i} length ${lens[i]!.toFixed(2)} vs mean ${mean.toFixed(2)}`,
+    )
+  }
 }
 
 function intrusionCount(mesh: Mesh, sight: PlanVertex[], zMin: number, inset: number): number {
@@ -727,6 +832,10 @@ assert(
 )
 console.log(`ok  heart-pack-rabbet: ${heartPackedReport.triangleCount} tris`)
 checkFrontFollowsMask(heartSight, 3, 0.8, 20, 'heart-front-mask')
+checkImportedGeometricOuter(gearPoly(), 'circle', 3, 0.8, 20, 'gear-circle-outer')
+checkImportedGeometricOuter(gearPoly(), 'hexagon', 3, 0.8, 20, 'gear-hexagon-outer')
+checkImportedGeometricOuter(gearPoly(), 'octagon', 3, 0.8, 20, 'gear-octagon-outer')
+checkImportedGeometricOuter(heartSight, 'rectangle', 3, 0.8, 20, 'heart-rect-outer')
 const heartMesh = buildFrame(heartParams, heartSight)
 const heartReport = inspectMesh(heartMesh)
 assert(heartReport.watertight, `heart: not watertight open=${heartReport.openEdges} nm=${heartReport.nonManifoldEdges}`)

@@ -19,6 +19,7 @@ import {
   type FrameParams,
   type Mesh,
   type PlanVertex,
+  type ShapeKind,
 } from './geom/types.ts'
 import { isPolygonalOutline } from './geom/plan.ts'
 import { inspectMesh } from './geom/validate.ts'
@@ -32,6 +33,7 @@ import {
   silhouetteSizeMm,
   unpackLitholabPack,
 } from './import/litholabPack.ts'
+import { suggestedImportedOuter, validateImportedOuter } from './geom/rectFrame.ts'
 import { FrameViewer } from './preview/viewer.ts'
 import { readParams, writeParams } from './ui/params.ts'
 import { renderProfileSketch } from './ui/profileSketch.ts'
@@ -45,6 +47,8 @@ interface ImportState {
   holes: PlanVertex[][]
   packOutline: PlanVertex[]
   packBorder: number
+  destWidth: number
+  destHeight: number
   silhouetteWidth: number
   silhouetteHeight: number
   artworkUrl: string | null
@@ -69,7 +73,10 @@ const widthInput = document.querySelector<HTMLInputElement>('#sight-width')
 const heightField = document.querySelector<HTMLElement>('#sight-height-field')
 const widthField = widthInput?.closest('.field')
 const widthLabel = document.querySelector<HTMLElement>('#sight-width-label')
+const heightLabel = document.querySelector<HTMLElement>('#sight-height-label')
 const sightSizeHint = document.querySelector<HTMLElement>('#sight-size-hint')
+const sightSizeHeading = document.querySelector<HTMLElement>('#sight-size-heading')
+const shapeHint = document.querySelector<HTMLElement>('#shape-hint')
 const stackPanel = document.querySelector<HTMLElement>('#stack-fields')
 const depthInput = document.querySelector<HTMLInputElement>('#rabbet-depth')
 const stackEnabled = document.querySelector<HTMLInputElement>('#stack-enabled')
@@ -84,6 +91,10 @@ const importStatus = document.querySelector<HTMLElement>('#import-status')
 const shapeGroup = document.querySelector<HTMLElement>('#shape-group')
 const importedLabel = document.querySelector<HTMLElement>('#shape-imported-label')
 const importedNameEl = document.querySelector<HTMLElement>('#shape-imported-name')
+const previewBusy = document.querySelector<HTMLElement>('#preview-busy')
+const previewBusyLabel = document.querySelector<HTMLElement>('#preview-busy-label')
+const mouldingWidthInput = document.querySelector<HTMLInputElement>('#moulding-width')
+const mouldingHeightInput = document.querySelector<HTMLInputElement>('#moulding-height')
 const versionEl = document.querySelector<HTMLElement>('#app-version')
 if (versionEl) versionEl.textContent = APP_LABEL
 const versionFoot = document.querySelector<HTMLElement>('#app-version-foot')
@@ -105,27 +116,56 @@ for (const group of PROFILE_GROUPS) {
 writeParams(form, DEFAULT_PARAMS)
 
 const viewer = new FrameViewer(previewHost)
+if (previewBusy) previewHost.appendChild(previewBusy)
 let lastMesh: Mesh | null = null
 let lastParams: FrameParams | null = null
 let imported: ImportState | null = null
+let lastShape: ShapeKind | null = null
 let timer = 0
+let rebuildGen = 0
 
 function syncShapeLock(): void {
-  const shape = form.querySelector<HTMLInputElement>('input[name="shape"]:checked')?.value
-  const importedOn = shape === 'imported'
-  const radius = isRadiusShape((shape ?? 'rectangle') as FrameParams['shape'])
-  if (widthInput) widthInput.disabled = importedOn
-  if (heightInput) heightInput.disabled = importedOn || radius
-  widthField?.classList.toggle('is-locked', importedOn)
-  heightField?.classList.toggle('is-locked', importedOn)
-  if (heightField) heightField.hidden = radius && !importedOn
-  if (widthLabel) widthLabel.textContent = radius && !importedOn ? 'Radius (mm)' : 'Width (mm)'
-  if (sightSizeHint) {
-    sightSizeHint.textContent = radius && !importedOn
-      ? 'Opening circumradius (centre to vertex). Height matches the bounding diameter.'
-      : 'Visible opening. The frame is sized from this plus moulding width.'
+  const shape = (form.querySelector<HTMLInputElement>('input[name="shape"]:checked')?.value ??
+    'rectangle') as ShapeKind
+  const importedFollow = shape === 'imported'
+  const hasImport = imported !== null
+  const geometricOuter = hasImport && !importedFollow
+  const radius = isRadiusShape(shape)
+  if (widthInput) widthInput.disabled = importedFollow
+  if (heightInput) heightInput.disabled = importedFollow || radius
+  widthField?.classList.toggle('is-locked', importedFollow)
+  heightField?.classList.toggle('is-locked', importedFollow)
+  if (heightField) heightField.hidden = radius && !importedFollow
+  if (sightSizeHeading) {
+    sightSizeHeading.textContent = geometricOuter ? 'Outer size' : 'Artwork / sight size'
   }
-  if (radius && !importedOn && heightInput && widthInput) {
+  if (widthLabel) {
+    if (geometricOuter && radius) widthLabel.textContent = 'Outer radius (mm)'
+    else if (geometricOuter) widthLabel.textContent = 'Outer width (mm)'
+    else if (radius) widthLabel.textContent = 'Radius (mm)'
+    else widthLabel.textContent = 'Width (mm)'
+  }
+  if (heightLabel) heightLabel.textContent = geometricOuter ? 'Outer height (mm)' : 'Height (mm)'
+  if (sightSizeHint) {
+    if (geometricOuter && radius) {
+      sightSizeHint.textContent =
+        'Outer circumradius (centre to vertex). The lithophane opening stays the imported mask.'
+    } else if (geometricOuter) {
+      sightSizeHint.textContent =
+        'Outer size of the frame. The lithophane opening stays the imported mask.'
+    } else if (radius) {
+      sightSizeHint.textContent =
+        'Opening circumradius (centre to vertex). Height matches the bounding diameter.'
+    } else {
+      sightSizeHint.textContent = 'Visible opening. The frame is sized from this plus moulding width.'
+    }
+  }
+  if (shapeHint) {
+    shapeHint.textContent = hasImport
+      ? 'The pack name follows the lithophane outline. Rectangle, hexagon, octagon, and circle set the outer edge only.'
+      : 'Rectangle, hexagon, octagon, or circle. Import a LithoLab pack to follow a custom opening.'
+  }
+  if (radius && !importedFollow && heightInput && widthInput) {
     const r = widthInput.valueAsNumber
     if (Number.isFinite(r)) heightInput.value = formatMm(2 * r)
   }
@@ -189,7 +229,12 @@ function setReadout(id: string, value: string): void {
 }
 
 function updateReadouts(params: FrameParams): void {
-  const d = deriveSizes(params)
+  const geometric = imported != null && params.shape !== 'imported'
+  const d = deriveSizes(params, {
+    geometricOuter: geometric,
+    destWidth: imported?.destWidth,
+    destHeight: imported?.destHeight,
+  })
   setReadout('out-outer', `${formatMm(d.outerWidth)} × ${formatMm(d.outerHeight)} mm`)
   setReadout('out-pocket', `${formatMm(d.pocketWidth)} × ${formatMm(d.pocketHeight)} mm`)
   setReadout('out-glass', `${formatMm(d.glassWidth)} × ${formatMm(d.glassHeight)} mm`)
@@ -217,6 +262,7 @@ function setImportError(message: string): void {
 function clearImport(writeDefaultShape = true): void {
   if (imported?.artworkUrl) URL.revokeObjectURL(imported.artworkUrl)
   imported = null
+  lastShape = null
   viewer.clearArtwork()
   if (writeDefaultShape) {
     const rect = form.querySelector<HTMLInputElement>('input[name="shape"][value="rectangle"]')
@@ -259,16 +305,107 @@ function syncImportedFit(params: FrameParams): FrameParams {
   return { ...params, fitClearance: fit, rabbetWidth: rw, mouldingWidth }
 }
 
+function applyImportedShapeSize(shape: ShapeKind): void {
+  if (!imported || !widthInput || !heightInput) return
+  const moulding = Number(form.querySelector<HTMLInputElement>('#moulding-width')?.value)
+  const mw = Number.isFinite(moulding) ? moulding : DEFAULT_PARAMS.mouldingWidth
+  if (shape === 'imported') {
+    widthInput.value = formatMm(imported.destWidth)
+    heightInput.value = formatMm(imported.destHeight)
+    return
+  }
+  if (lastShape === 'imported' || lastShape == null) {
+    const suggested = suggestedImportedOuter(imported.sight, mw, shape)
+    widthInput.value = formatMm(suggested.sightWidth)
+    heightInput.value = formatMm(suggested.sightHeight)
+    return
+  }
+  if (lastShape === shape) return
+  const prevRadius = isRadiusShape(lastShape)
+  const nextRadius = isRadiusShape(shape)
+  if (!prevRadius && nextRadius) {
+    const w = widthInput.valueAsNumber
+    const h = heightInput.valueAsNumber
+    if (Number.isFinite(w) && Number.isFinite(h)) {
+      const r = Math.hypot(w / 2, h / 2)
+      widthInput.value = formatMm(r)
+      heightInput.value = formatMm(2 * r)
+    }
+  } else if (prevRadius && !nextRadius) {
+    const r = widthInput.valueAsNumber
+    if (Number.isFinite(r)) {
+      widthInput.value = formatMm(2 * r)
+      heightInput.value = formatMm(2 * r)
+    }
+  }
+}
+
+function isMouldingField(el: EventTarget | null): boolean {
+  return el instanceof HTMLElement && (el.id === 'moulding-width' || el.id === 'moulding-height')
+}
+
+function shapeLabel(shape: ShapeKind): string {
+  if (shape === 'imported') return imported?.name ?? 'imported'
+  return shape
+}
+
+function updateProfileSketchLive(): void {
+  syncFaceSliders()
+  const params = readParams(form)
+  const def = PROFILE_DEFS.find((p) => p.id === params.profile)
+  if (profileHint) profileHint.textContent = def?.description ?? ''
+  if (profileSvg) renderProfileSketch(profileSvg, buildProfile(params))
+}
+
+function setBusy(phase: string | null): void {
+  if (phase) {
+    previewHost.setAttribute('aria-busy', 'true')
+    if (previewBusy) {
+      previewBusy.hidden = false
+      if (previewBusyLabel) previewBusyLabel.textContent = phase
+    }
+    statusEl.textContent = phase
+    downloadBtn.disabled = true
+    return
+  }
+  previewHost.setAttribute('aria-busy', 'false')
+  if (previewBusy) previewBusy.hidden = true
+}
+
+function yieldPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  })
+}
+
+async function runRebuild(note?: string, phase = 'Building frame…'): Promise<void> {
+  const id = ++rebuildGen
+  window.clearTimeout(timer)
+  setBusy(phase)
+  await yieldPaint()
+  if (id !== rebuildGen) return
+  try {
+    rebuild(note)
+  } finally {
+    if (id === rebuildGen) setBusy(null)
+  }
+}
+
 function rebuild(fitNote?: string): void {
-  const shape = form.querySelector<HTMLInputElement>('input[name="shape"]:checked')?.value
-  if (shape !== 'imported' && imported) clearImport(false)
+  const shape = (form.querySelector<HTMLInputElement>('input[name="shape"]:checked')?.value ??
+    'rectangle') as ShapeKind
+  if (imported) applyImportedShapeSize(shape)
+  lastShape = shape
 
   syncShapeLock()
   syncStackLock()
   syncFaceSliders()
   let params = readParams(form)
-  if (imported && params.shape === 'imported') params = syncImportedFit(params)
-  const issues = validateParams(params)
+  if (imported) params = syncImportedFit(params)
+  const issues = [
+    ...validateParams(params),
+    ...(imported && params.shape !== 'imported' ? validateImportedOuter(params, imported.sight) : []),
+  ]
   updateReadouts(params)
 
   const def = PROFILE_DEFS.find((p) => p.id === params.profile)
@@ -288,7 +425,7 @@ function rebuild(fitNote?: string): void {
     viewer.setMesh(mesh, {
       smooth:
         params.shape === 'circle' ||
-        (params.shape === 'imported' && !isPolygonalOutline(imported?.sight ?? [])),
+        (!!imported && !isPolygonalOutline(imported.sight)),
     })
     syncArtwork(params)
     lastMesh = mesh
@@ -297,7 +434,7 @@ function rebuild(fitNote?: string): void {
     setIssues(report.watertight ? [] : ['Mesh is not watertight — check profile parameters.'])
     const extra = fitNote ? ` ${fitNote}` : ''
     const summary =
-      params.shape === 'imported' && imported
+      imported
         ? importedFrameSummary(params, imported.name)
         : frameSummary(params)
     statusEl.textContent = `${summary} · ${report.triangleCount} triangles${extra}`
@@ -315,81 +452,152 @@ function scheduleRebuild(): void {
 }
 
 async function importPackFile(file: File): Promise<void> {
-  statusEl.textContent = `Reading ${file.name}…`
-  const assets = await unpackLitholabPack(file)
-  const current = readParams(form)
-  const base: FrameParams = {
-    ...current,
-    shape: current.shape === 'imported' ? 'rectangle' : current.shape,
-  }
-  const params = mapPackToFrameParams(assets.json, base)
-  const destW = assets.json.export.width
-  const destH = assets.json.export.height
+  const id = ++rebuildGen
+  window.clearTimeout(timer)
+  try {
+    setBusy(`Reading ${file.name}…`)
+    await yieldPaint()
+    if (id !== rebuildGen) return
+    const assets = await unpackLitholabPack(file)
+    if (id !== rebuildGen) return
 
-  let maskedImg = assets.maskedPngBlob ? await rgbaFromBlob(assets.maskedPngBlob) : null
-  let sight: PlanVertex[]
-  let artSight: PlanVertex[]
-  let holes: PlanVertex[][]
-  if (assets.maskBlob) {
-    const maskImg = await rgbaFromBlob(assets.maskBlob)
-    const trace = sightFromMaskImage(maskImg, destW, destH)
-    holes = trace.holes
-    artSight = trace.sight
-    sight = unsmoothedPlanFromMaskImage(maskImg, destW, destH)
-  } else if (maskedImg) {
-    const px = assets.json.export.pixelSizeMm || 0.2
-    const loops = extractMaskPolygons(maskedImg, { smoothIters: 0 })
-    const trace = sightFromPixelLoops(loops, px)
-    holes = trace.holes
-    artSight = trace.sight
-    const trim = trimMaskLoops(loops)
-    if (!trim) throw new Error('Could not trace a silhouette from the masked image.')
-    sight = platePlanFromTrimmed(trim, trim.trimW * px, trim.trimH * px)
-  } else {
-    throw new Error('This pack has no mask or original-masked.png to trace.')
-  }
+    const current = readParams(form)
+    const base: FrameParams = {
+      ...current,
+      shape: current.shape === 'imported' ? 'rectangle' : current.shape,
+    }
+    const params = mapPackToFrameParams(assets.json, base)
+    const destW = assets.json.export.width
+    const destH = assets.json.export.height
 
-  const packBorder = Math.max(0, assets.json.export.border)
-  const packOutline = packOutlineFromPlan(sight, packBorder)
+    setBusy('Tracing mask…')
+    await yieldPaint()
+    if (id !== rebuildGen) return
 
-  const sil = silhouetteSizeMm(
-    assets.json,
-    maskedImg ? { width: maskedImg.width, height: maskedImg.height } : null,
-  )
+    let maskedImg = assets.maskedPngBlob ? await rgbaFromBlob(assets.maskedPngBlob) : null
+    let sight: PlanVertex[]
+    let artSight: PlanVertex[]
+    let holes: PlanVertex[][]
+    if (assets.maskBlob) {
+      const maskImg = await rgbaFromBlob(assets.maskBlob)
+      const trace = sightFromMaskImage(maskImg, destW, destH)
+      holes = trace.holes
+      artSight = trace.sight
+      sight = unsmoothedPlanFromMaskImage(maskImg, destW, destH)
+    } else if (maskedImg) {
+      const px = assets.json.export.pixelSizeMm || 0.2
+      const loops = extractMaskPolygons(maskedImg, { smoothIters: 0 })
+      const trace = sightFromPixelLoops(loops, px)
+      holes = trace.holes
+      artSight = trace.sight
+      const trim = trimMaskLoops(loops)
+      if (!trim) throw new Error('Could not trace a silhouette from the masked image.')
+      sight = platePlanFromTrimmed(trim, trim.trimW * px, trim.trimH * px)
+    } else {
+      throw new Error('This pack has no mask or original-masked.png to trace.')
+    }
 
-  if (imported?.artworkUrl) URL.revokeObjectURL(imported.artworkUrl)
-  let artworkUrl: string | null = null
-  if (maskedImg) {
-    const composited = compositeArtworkRgba(maskedImg, {
-      widthMm: sil.width,
-      heightMm: sil.height,
-      sight: artSight,
+    const packBorder = Math.max(0, assets.json.export.border)
+    const packOutline = packOutlineFromPlan(sight, packBorder)
+
+    const sil = silhouetteSizeMm(
+      assets.json,
+      maskedImg ? { width: maskedImg.width, height: maskedImg.height } : null,
+    )
+
+    setBusy('Preparing artwork…')
+    await yieldPaint()
+    if (id !== rebuildGen) return
+
+    if (imported?.artworkUrl) URL.revokeObjectURL(imported.artworkUrl)
+    let artworkUrl: string | null = null
+    if (maskedImg) {
+      const composited = compositeArtworkRgba(maskedImg, {
+        widthMm: sil.width,
+        heightMm: sil.height,
+        sight: artSight,
+        holes,
+      })
+      artworkUrl = URL.createObjectURL(await rgbaToPngBlob(composited))
+    } else if (assets.photoBlob) {
+      artworkUrl = URL.createObjectURL(assets.photoBlob)
+    }
+    imported = {
+      name: assets.name,
+      sourceFile: file.name,
+      sight,
       holes,
-    })
-    artworkUrl = URL.createObjectURL(await rgbaToPngBlob(composited))
-  } else if (assets.photoBlob) {
-    artworkUrl = URL.createObjectURL(assets.photoBlob)
-  }
-  imported = {
-    name: assets.name,
-    sourceFile: file.name,
-    sight,
-    holes,
-    packOutline,
-    packBorder,
-    silhouetteWidth: sil.width,
-    silhouetteHeight: sil.height,
-    artworkUrl,
-  }
+      packOutline,
+      packBorder,
+      destWidth: destW,
+      destHeight: destH,
+      silhouetteWidth: sil.width,
+      silhouetteHeight: sil.height,
+      artworkUrl,
+    }
 
-  writeParams(form, params)
-  if (importStatus) importStatus.classList.remove('is-error')
-  syncImportUi()
-  rebuild(`· from ${file.name}`)
+    lastShape = 'imported'
+
+    writeParams(form, params)
+    if (importStatus) importStatus.classList.remove('is-error')
+    syncImportUi()
+
+    setBusy('Building frame…')
+    await yieldPaint()
+    if (id !== rebuildGen) return
+    rebuild(`· from ${file.name}`)
+  } catch (err: unknown) {
+    if (id === rebuildGen) {
+      const message = err instanceof Error ? err.message : 'Could not import that pack.'
+      setImportError(message)
+      statusEl.textContent = 'Import failed'
+      downloadBtn.disabled = !lastMesh
+    }
+  } finally {
+    if (id === rebuildGen) setBusy(null)
+  }
 }
 
-form.addEventListener('input', scheduleRebuild)
-form.addEventListener('change', scheduleRebuild)
+form.addEventListener('input', (e) => {
+  if (isMouldingField(e.target)) {
+    updateProfileSketchLive()
+    return
+  }
+  if (e.target instanceof HTMLInputElement && e.target.name === 'shape') return
+  if (e.target instanceof HTMLSelectElement && e.target.id === 'profile') return
+  scheduleRebuild()
+})
+
+form.addEventListener('change', (e) => {
+  const t = e.target
+  if (t instanceof HTMLSelectElement && t.id === 'profile') {
+    const def = PROFILE_DEFS.find((p) => p.id === t.value)
+    void runRebuild(undefined, `Applying ${def?.label ?? t.value} profile…`)
+    return
+  }
+  if (t instanceof HTMLInputElement && t.name === 'shape') {
+    const shape = t.value as ShapeKind
+    const phase =
+      imported && shape !== 'imported'
+        ? `Building ${shapeLabel(shape)} outer…`
+        : `Building ${shapeLabel(shape)}…`
+    void runRebuild(undefined, phase)
+    return
+  }
+  if (isMouldingField(t)) {
+    void runRebuild(undefined, 'Updating moulding…')
+    return
+  }
+  scheduleRebuild()
+})
+
+for (const el of [mouldingWidthInput, mouldingHeightInput]) {
+  el?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    el.blur()
+  })
+}
 
 downloadBtn.addEventListener('click', () => {
   if (!lastMesh || !lastParams) return
@@ -400,7 +608,7 @@ downloadBtn.addEventListener('click', () => {
 resetBtn?.addEventListener('click', () => {
   clearImport(false)
   writeParams(form, DEFAULT_PARAMS)
-  rebuild()
+  void runRebuild(undefined, 'Building frame…')
 })
 
 importBtn?.addEventListener('click', () => packInput?.click())
@@ -412,12 +620,13 @@ packInput?.addEventListener('change', () => {
     const message = err instanceof Error ? err.message : 'Could not import that pack.'
     setImportError(message)
     statusEl.textContent = 'Import failed'
+    downloadBtn.disabled = !lastMesh
   })
 })
 
 clearImportBtn?.addEventListener('click', () => {
   clearImport(true)
-  rebuild()
+  void runRebuild(undefined, 'Building frame…')
 })
 
 syncImportUi()

@@ -377,6 +377,35 @@ export function holesInsideLoop(outer: PlanLoop, holes: PlanLoop[]): PlanLoop[] 
   })
 }
 
+function orient(a: PlanVertex, b: PlanVertex, c: PlanVertex): number {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+}
+
+function properSegIntersect(a: PlanVertex, b: PlanVertex, c: PlanVertex, d: PlanVertex): boolean {
+  const o1 = orient(a, b, c)
+  const o2 = orient(a, b, d)
+  const o3 = orient(c, d, a)
+  const o4 = orient(c, d, b)
+  return o1 * o2 < 0 && o3 * o4 < 0
+}
+
+/** True when non-adjacent edges of a closed loop cross. */
+export function closedLoopSelfIntersects(poly: PlanLoop): boolean {
+  const n = poly.length
+  if (n < 4) return false
+  for (let i = 0; i < n; i++) {
+    const a = poly[i]!
+    const b = poly[(i + 1) % n]!
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue
+      const c = poly[j]!
+      const d = poly[(j + 1) % n]!
+      if (properSegIntersect(a, b, c, d)) return true
+    }
+  }
+  return false
+}
+
 export function minEdgeDistance(pt: PlanVertex, poly: PlanLoop): number {
   let best = Infinity
   for (let i = 0; i < poly.length; i++) {

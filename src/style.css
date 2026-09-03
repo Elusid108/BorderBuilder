@@ -380,6 +380,7 @@ button.ghost:hover {
 }
 
 .preview {
+  position: relative;
   width: 100%;
   height: 100%;
 }
@@ -388,6 +389,45 @@ button.ghost:hover {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.preview-busy {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(18, 18, 18, 0.55);
+  color: var(--text);
+  pointer-events: none;
+}
+
+.preview-busy[hidden] {
+  display: none;
+}
+
+.preview-busy-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--line-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: preview-busy-spin 0.7s linear infinite;
+}
+
+.preview-busy p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--accent-strong);
+}
+
+@keyframes preview-busy-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 860px) {

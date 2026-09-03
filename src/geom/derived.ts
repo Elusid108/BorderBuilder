@@ -32,12 +32,32 @@ export function effectiveSight(params: FrameParams): { width: number; height: nu
   return { width: params.sightWidth, height: params.sightHeight }
 }
 
-export function deriveSizes(params: FrameParams): DerivedSizes {
+export function deriveSizes(
+  params: FrameParams,
+  opts?: { geometricOuter?: boolean; destWidth?: number; destHeight?: number },
+): DerivedSizes {
   const { width, height } = effectiveSight(params)
   const mw = params.mouldingWidth
   const rw = params.rabbetWidth
   const clearance = Math.max(0, params.fitClearance)
   const depth = effectiveRabbetDepth(params)
+  if (opts?.geometricOuter) {
+    const outerWidth = isRadiusShape(params.shape) ? 2 * params.sightWidth : params.sightWidth
+    const outerHeight = isRadiusShape(params.shape) ? 2 * params.sightWidth : params.sightHeight
+    const destW = opts.destWidth ?? width
+    const destH = opts.destHeight ?? height
+    return {
+      outerWidth,
+      outerHeight,
+      pocketWidth: destW + 2 * rw,
+      pocketHeight: destH + 2 * rw,
+      glassWidth: destW + 2 * rw - clearance,
+      glassHeight: destH + 2 * rw - clearance,
+      effectiveRabbetDepth: depth,
+      stackTotal: stackTotal(params),
+      effectiveLipWidth: effectiveLipWidth(params),
+    }
+  }
   return {
     outerWidth: width + 2 * mw,
     outerHeight: height + 2 * mw,

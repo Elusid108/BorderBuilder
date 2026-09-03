@@ -1,5 +1,6 @@
 import JSZip from 'jszip'
 import { offsetLoop } from '../geom/offset.ts'
+import { offsetLoopMiter } from '../geom/miterSweep.ts'
 import type { FrameParams, PlanVertex } from '../geom/types.ts'
 
 export const PROJECT_SCHEMA_VERSION = 1
@@ -240,16 +241,18 @@ export function packOutlineFromPlan(maskPlan: PlanVertex[], borderMm: number): P
   )
 }
 
-/** Back rabbet wall: pack outline plus fit clearance. */
+/** Back rabbet wall: pack outline plus fit clearance (miter parallel, no Chaikin). */
 export function pocketRingFromPack(packOutline: PlanVertex[], fitMm: number): PlanVertex[] {
   const fit = Math.max(PACK_XY_FIT_MM, fitMm)
   if (!(fit > 1e-9)) return packOutline
+  const mitered = offsetLoopMiter(packOutline, fit)
+  if (mitered && mitered.length >= 3) return mitered
   return (
     offsetLoop(packOutline, fit, {
-      maxGrid: 2048,
-      cellSize: Math.max(fit / 12, 1e-6),
+      maxGrid: 4096,
+      cellSize: Math.max(fit / 24, 0.03),
       smoothRouted: false,
-      smoothIters: 2,
+      smoothIters: 0,
     }) ?? packOutline
   )
 }

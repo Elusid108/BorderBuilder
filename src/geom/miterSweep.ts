@@ -1,3 +1,4 @@
+import { closedLoopSelfIntersects, ensureCcw, removeDegen, signedArea } from './plan.ts'
 import type { Mesh, PlanVertex, ProfilePoint, Triangle, Vec3 } from './types.ts'
 
 function sub(a: PlanVertex, b: PlanVertex): PlanVertex {
@@ -38,6 +39,50 @@ export function miterOffset(
     x: curr.x + (u * (n1.x + n2.x)) / denom,
     y: curr.y + (u * (n1.y + n2.y)) / denom,
   }
+}
+
+const MITER_LIMIT = 4
+
+function miterLengthRatio(n1: PlanVertex, n2: PlanVertex): number {
+  const dot = n1.x * n2.x + n1.y * n2.y
+  const denom = 1 + dot
+  if (Math.abs(denom) < 1e-8) return 1
+  return Math.sqrt(2 / Math.max(1e-12, 1 + dot))
+}
+
+/**
+ * Parallel offset of a closed loop with miter joins. Spikes beyond `miterLimit`
+ * become a two-point bevel. Returns null if the result self-intersects or
+ * fails to grow (caller may fall back to a disk offset).
+ */
+export function offsetLoopMiter(
+  poly: PlanVertex[],
+  delta: number,
+  miterLimit = MITER_LIMIT,
+): PlanVertex[] | null {
+  const loop = ensureCcw(removeDegen(poly))
+  if (loop.length < 3) return null
+  if (!(delta > 1e-9)) return loop
+  const n = loop.length
+  const out: PlanVertex[] = []
+  for (let i = 0; i < n; i++) {
+    const prev = loop[(i - 1 + n) % n]!
+    const curr = loop[i]!
+    const next = loop[(i + 1) % n]!
+    const n1 = outwardNormal(prev, curr)
+    const n2 = outwardNormal(curr, next)
+    if (miterLengthRatio(n1, n2) > miterLimit) {
+      out.push({ x: curr.x + n1.x * delta, y: curr.y + n1.y * delta })
+      out.push({ x: curr.x + n2.x * delta, y: curr.y + n2.y * delta })
+    } else {
+      out.push(miterOffset(prev, curr, next, delta))
+    }
+  }
+  const clean = ensureCcw(removeDegen(out))
+  if (clean.length < 3) return null
+  if (signedArea(clean) <= signedArea(loop) + 1e-6) return null
+  if (closedLoopSelfIntersects(clean)) return null
+  return clean
 }
 
 function place(vertex: PlanVertex, point: ProfilePoint): Vec3 {
