@@ -2,7 +2,7 @@
 
 Client-side STL generator for picture frames and lithophane borders. You set a **sight size** and **moulding profile**, or import a **LithoLab pack**; the app builds a single watertight solid and downloads a millimetre-unit STL for 3D printing.
 
-**v0.6.1** — Hexagon / Octagon / Rectangle / Circle outers around an imported lithophane no longer warp to the inner teeth; moulding Width / Height commit on blur or Enter; import, shape, and profile changes show a live busy phase until the mesh is ready. **v0.6.0** — Back rabbet is a sharp parallel of the LithoLab pack plus Fit (default 0.8 mm). After import, Rectangle / Hexagon / Octagon / Circle set a user-sized outer while the lithophane hole and rabbet stay. v0.5.1 pinned the front to the unsmoothed plate. v0.5.0 followed the pack on the back but lofted a smoothed sight on the front. Square is gone; Hexagon, Octagon, and Circle size by circumradius. v0.4.2 tried to follow a smoothed sight offset and still sat on the inner magenta. v0.4.1 — Letter-A and other notched organic frames: the moulding follows the traced outline (including the gap between an A’s legs) instead of a convex hull or a straight bar across the bottom; the preview shows the masked letter, not the unclipped photo; offset-loft rings stay corresponded to the sight so the legs no longer fold through the opening. v0.4.0 classified stencil holes and kept gray mask fill inside the silhouette. The original “Phase 1 rectangles only” plan has been overtaken by LithoLab import and mixed plan shapes. This README describes what actually ships, then a tentative backlog.
+**v0.7.0** — Responsive app shell: desktop is a fixed-viewport workbench (control rail scrolls internally, Download STL stays on screen); phones stack the 3D preview first with a sticky bottom action bar and no horizontal scrolling. **v0.6.1** — Hexagon / Octagon / Rectangle / Circle outers around an imported lithophane no longer warp to the inner teeth; moulding Width / Height commit on blur or Enter; import, shape, and profile changes show a live busy phase until the mesh is ready. **v0.6.0** — Back rabbet is a sharp parallel of the LithoLab pack plus Fit (default 0.8 mm). After import, Rectangle / Hexagon / Octagon / Circle set a user-sized outer while the lithophane hole and rabbet stay. v0.5.1 pinned the front to the unsmoothed plate. v0.5.0 followed the pack on the back but lofted a smoothed sight on the front. Square is gone; Hexagon, Octagon, and Circle size by circumradius. v0.4.2 tried to follow a smoothed sight offset and still sat on the inner magenta. v0.4.1 — Letter-A and other notched organic frames: the moulding follows the traced outline (including the gap between an A’s legs) instead of a convex hull or a straight bar across the bottom; the preview shows the masked letter, not the unclipped photo; offset-loft rings stay corresponded to the sight so the legs no longer fold through the opening. v0.4.0 classified stencil holes and kept gray mask fill inside the silhouette. The original “Phase 1 rectangles only” plan has been overtaken by LithoLab import and mixed plan shapes. This README describes what actually ships, then a tentative backlog.
 
 Runs entirely in the browser. No backend. Intended host: **GitHub Pages**. The header pill, footer, page title, and STL file header all read the version from `package.json`.
 
@@ -20,7 +20,7 @@ Runs entirely in the browser. No backend. Intended host: **GitHub Pages**. The h
 - **Fit clearance:** rectangles shrink the glass-size readout so glass is not press-fit. LithoLab import is the lithophane-to-rabbet gap around the pack; drag it to grow or shrink the back wall live (floor 0.8 mm).
 - **Derived readouts:** outer size, rabbet pocket, glass size, effective rabbet depth, stack total.
 - **Preview:** orbitable Three.js view. Moulding width/height apply on blur or Enter (the profile sketch still updates while you type). Import, shape, and profile changes show a busy overlay with a live phase until the mesh is ready. Faceted shading on polygonal imports; smoother shading on organic ones.
-- **Export:** binary STL, one watertight solid, millimetres, header `BorderBuilder v0.6.1`.
+- **Export:** binary STL, one watertight solid, millimetres, header `BorderBuilder v0.7.0`.
 - **Defaults:** 100 × 150 mm artwork, 20 mm moulding, 15 mm thick, 6 mm rabbet width, 5 mm rabbet depth, 0.8 mm fit clearance.
 
 Validation rejects non-positive sizes, rabbet width ≥ moulding width, and rabbet depth ≥ moulding height.
@@ -43,6 +43,16 @@ npm run check:geom  # watertight / bbox / STL header / import self-check
 ```
 
 Bump the UI / STL version by changing `"version"` in `package.json` only.
+
+## Layout & Responsive Design
+
+Desktop (`1024px` and up) is a **fixed-viewport app shell**: the page does not scroll. A 340px control rail sits beside a full-bleed Three.js preview. The rail header (brand + version) and the **Download STL** / **Reset defaults** row stay on screen; the parameter sections scroll inside `.sidebar-scroll`. The preview fills the remaining height and width.
+
+Tablet (`768px`–`1023px`) keeps the two-column shell with a narrower 280px rail. Input rows wrap if they cannot fit side by side.
+
+Mobile (`max-width: 767px`) is a **single-column stack** of the same DOM (CSS `order` only — the preview is first). The document may scroll vertically; it must not scroll horizontally. Download and Reset sit in a sticky bottom bar (`padding-bottom` includes `env(safe-area-inset-bottom)`). Orbit/zoom on the preview uses Three.js OrbitControls with `touch-action: none` so a drag does not scroll the page. Number inputs and selects use `16px` type to avoid iOS auto-zoom. Viewport meta includes `viewport-fit=cover`.
+
+Known limitations: the LithoLab file control is a hidden `#pack-input` opened by **Import pack…**, so iOS still uses the system file sheet (native file-input styling does not apply). There are no in-app modals. The WebGL canvas is a fluid viewport resized with the stage, not a CSS-scaled bitmap, so pointer coordinates stay in CSS pixels via OrbitControls.
 
 ## GitHub Pages
 
