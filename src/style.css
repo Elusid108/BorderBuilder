@@ -114,6 +114,18 @@ h2 {
   gap: 10px;
 }
 
+.row.row-3 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+h3.sub {
+  margin: 12px 0 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent-strong);
+  letter-spacing: 0.03em;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -389,6 +401,45 @@ button.ghost:hover {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.preview-tools {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 3;
+  padding: 8px 12px;
+  background: rgba(30, 30, 30, 0.85);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.preview-tools[hidden] {
+  display: none;
+}
+
+.preview-tools label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.preview-tools input {
+  width: 140px;
+}
+
+.actions .kit {
+  grid-column: 1 / -1;
+}
+
+.actions .kit[hidden] {
+  display: none;
+}
+
+.derived dl > div[hidden] {
+  display: none;
 }
 
 .preview-busy {

@@ -1,3 +1,4 @@
+import { segmentIndexFor } from './segIndex.ts'
 import type { PlanVertex } from './types.ts'
 
 export type PlanLoop = PlanVertex[]
@@ -393,6 +394,7 @@ function properSegIntersect(a: PlanVertex, b: PlanVertex, c: PlanVertex, d: Plan
 export function closedLoopSelfIntersects(poly: PlanLoop): boolean {
   const n = poly.length
   if (n < 4) return false
+  if (n >= 48) return segmentIndexFor(poly).selfIntersects()
   for (let i = 0; i < n; i++) {
     const a = poly[i]!
     const b = poly[(i + 1) % n]!
@@ -407,6 +409,7 @@ export function closedLoopSelfIntersects(poly: PlanLoop): boolean {
 }
 
 export function minEdgeDistance(pt: PlanVertex, poly: PlanLoop): number {
+  if (poly.length >= 32) return segmentIndexFor(poly).distance(pt)
   let best = Infinity
   for (let i = 0; i < poly.length; i++) {
     const a = poly[i]!

@@ -1,8 +1,55 @@
-import { DEFAULT_PARAMS, isRadiusShape, type FrameParams, type ProfileId, type ShapeKind } from '../geom/types.ts'
+import {
+  DEFAULT_PARAMS,
+  isRadiusShape,
+  type AcrylicPresetId,
+  type BacklightParams,
+  type FrameParams,
+  type ProfileId,
+  type ScrewSize,
+  type ShapeKind,
+} from '../geom/types.ts'
 
-function num(input: HTMLInputElement, fallback: number): number {
-  const v = input.valueAsNumber
+function num(input: HTMLInputElement | null, fallback: number): number {
+  const v = input?.valueAsNumber ?? NaN
   return Number.isFinite(v) ? v : fallback
+}
+
+function field(form: HTMLFormElement, id: string): HTMLInputElement | null {
+  return form.querySelector<HTMLInputElement>(`#${id}`)
+}
+
+function checked(form: HTMLFormElement, id: string, fallback: boolean): boolean {
+  return field(form, id)?.checked ?? fallback
+}
+
+function selected<T extends string>(form: HTMLFormElement, id: string, fallback: T): T {
+  return (form.querySelector<HTMLSelectElement>(`#${id}`)?.value as T | undefined) || fallback
+}
+
+function readBacklight(form: HTMLFormElement): BacklightParams {
+  const d = DEFAULT_PARAMS.backlight
+  const n = (id: string, fallback: number) => num(field(form, id), fallback)
+  return {
+    enabled: checked(form, 'bl-enabled', d.enabled),
+    acrylicPreset: selected<AcrylicPresetId>(form, 'bl-acrylic', d.acrylicPreset),
+    acrylicThickness: n('bl-acrylic-thickness', d.acrylicThickness),
+    ledStripWidth: n('bl-led-width', d.ledStripWidth),
+    ledGap: n('bl-led-gap', d.ledGap),
+    scorePitch: n('bl-score-pitch', d.scorePitch),
+    scoreFace: selected<'back' | 'front'>(form, 'bl-score-face', d.scoreFace),
+    panelThickness: n('bl-panel-thickness', d.panelThickness),
+    panelOverlap: n('bl-panel-overlap', d.panelOverlap),
+    panelFit: n('bl-panel-fit', d.panelFit),
+    wireAngleDeg: n('bl-wire-angle', d.wireAngleDeg),
+    wireWidth: n('bl-wire-width', d.wireWidth),
+    wireDepth: n('bl-wire-depth', d.wireDepth),
+    kickstand: checked(form, 'bl-kickstand', d.kickstand),
+    kickstandTilt: n('bl-kick-tilt', d.kickstandTilt),
+    kickstandWidth: n('bl-kick-width', d.kickstandWidth),
+    kickstandThickness: n('bl-kick-thickness', d.kickstandThickness),
+    buttonCount: Math.round(n('bl-buttons', d.buttonCount)),
+    screw: selected<ScrewSize>(form, 'bl-screw', d.screw),
+  }
 }
 
 export function readParams(form: HTMLFormElement): FrameParams {
@@ -33,6 +80,13 @@ export function readParams(form: HTMLFormElement): FrameParams {
       clearance: num(form.querySelector('#stack-clearance')!, DEFAULT_PARAMS.rabbetStack.clearance),
     },
     fitClearance: num(form.querySelector('#fit-clearance')!, DEFAULT_PARAMS.fitClearance),
+    chamfer: {
+      sight: num(field(form, 'chamfer-sight'), DEFAULT_PARAMS.chamfer.sight),
+      backOuter: num(field(form, 'chamfer-back'), DEFAULT_PARAMS.chamfer.backOuter),
+      rabbetMouth: num(field(form, 'chamfer-mouth'), DEFAULT_PARAMS.chamfer.rabbetMouth),
+    },
+    backlight: readBacklight(form),
+    packBorder: null,
   }
 }
 
@@ -56,6 +110,39 @@ export function writeParams(form: HTMLFormElement, params: FrameParams): void {
   setValue(form, '#stack-backing', params.rabbetStack.backing)
   setValue(form, '#stack-clearance', params.rabbetStack.clearance)
   setValue(form, '#fit-clearance', params.fitClearance)
+  setValue(form, '#chamfer-sight', params.chamfer.sight)
+  setValue(form, '#chamfer-back', params.chamfer.backOuter)
+  setValue(form, '#chamfer-mouth', params.chamfer.rabbetMouth)
+  const b = params.backlight
+  setChecked(form, '#bl-enabled', b.enabled)
+  setSelect(form, '#bl-acrylic', b.acrylicPreset)
+  setValue(form, '#bl-acrylic-thickness', b.acrylicThickness)
+  setValue(form, '#bl-led-width', b.ledStripWidth)
+  setValue(form, '#bl-led-gap', b.ledGap)
+  setValue(form, '#bl-score-pitch', b.scorePitch)
+  setSelect(form, '#bl-score-face', b.scoreFace)
+  setValue(form, '#bl-panel-thickness', b.panelThickness)
+  setValue(form, '#bl-panel-overlap', b.panelOverlap)
+  setValue(form, '#bl-panel-fit', b.panelFit)
+  setValue(form, '#bl-wire-angle', b.wireAngleDeg)
+  setValue(form, '#bl-wire-width', b.wireWidth)
+  setValue(form, '#bl-wire-depth', b.wireDepth)
+  setChecked(form, '#bl-kickstand', b.kickstand)
+  setValue(form, '#bl-kick-tilt', b.kickstandTilt)
+  setValue(form, '#bl-kick-width', b.kickstandWidth)
+  setValue(form, '#bl-kick-thickness', b.kickstandThickness)
+  setValue(form, '#bl-buttons', b.buttonCount)
+  setSelect(form, '#bl-screw', b.screw)
+}
+
+function setChecked(form: HTMLFormElement, selector: string, value: boolean): void {
+  const el = form.querySelector<HTMLInputElement>(selector)
+  if (el) el.checked = value
+}
+
+function setSelect(form: HTMLFormElement, selector: string, value: string): void {
+  const el = form.querySelector<HTMLSelectElement>(selector)
+  if (el) el.value = value
 }
 
 function setValue(form: HTMLFormElement, selector: string, value: number): void {

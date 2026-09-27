@@ -104,6 +104,11 @@ export function buildPresetFrame(params: FrameParams): Mesh {
   if (issues.length > 0) {
     throw new Error(issues.map((i) => i.message).join(' '))
   }
+  return buildPresetFrameUnchecked(params)
+}
+
+/** `buildPresetFrame` without validation (caller already validated). */
+export function buildPresetFrameUnchecked(params: FrameParams): Mesh {
   const profile = buildProfile(params)
   if (params.shape === 'hexagon') {
     return sweepMiteredProfile(regularPolygonSight(6, params.sightWidth, 0), profile)

@@ -1,16 +1,18 @@
 {
   "name": "border-builder",
   "private": true,
-  "version": "0.6.1",
+  "version": "0.7.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "check:geom": "tsx src/geom/selfcheck.ts"
+    "check:geom": "tsx src/geom/selfcheck.ts",
+    "bench:geom": "tsx src/geom/bench.ts"
   },
   "dependencies": {
     "jszip": "^3.10.1",
+    "manifold-3d": "^3.5.4",
     "three": "^0.170.0"
   },
   "devDependencies": {

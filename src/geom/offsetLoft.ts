@@ -10,6 +10,7 @@ import {
   rotateToLandmark,
   sub,
 } from './plan.ts'
+import { segmentIndexFor } from './segIndex.ts'
 import type { Mesh, PlanVertex, ProfilePoint, Triangle, Vec3 } from './types.ts'
 
 function place(p: PlanVertex, v: number): Vec3 {
@@ -73,50 +74,43 @@ function loopArcLengths(loop: PlanVertex[]): { segs: number[]; perim: number } {
   return { segs, perim }
 }
 
-function pointAtArc(loop: PlanVertex[], segs: number[], perim: number, s: number): PlanVertex {
-  let t = ((s % perim) + perim) % perim
-  for (let i = 0; i < loop.length; i++) {
-    const len = segs[i] ?? 0
-    if (t <= len || i === loop.length - 1) {
-      const u = len < 1e-12 ? 0 : t / len
-      const a = loop[i]!
-      const b = loop[(i + 1) % loop.length]!
-      return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u }
+const cumCache = new WeakMap<number[], Float64Array>()
+
+/** Cumulative arc length at the end of each segment (memoised per `segs` array). */
+function cumulativeEnds(segs: number[]): Float64Array {
+  let cum = cumCache.get(segs)
+  if (!cum) {
+    cum = new Float64Array(segs.length)
+    let acc = 0
+    for (let i = 0; i < segs.length; i++) {
+      acc += segs[i] ?? 0
+      cum[i] = acc
     }
-    t -= len
+    cumCache.set(segs, cum)
   }
-  return loop[0]!
+  return cum
 }
 
-function closestArcParam(
-  p: PlanVertex,
-  loop: PlanVertex[],
-  segs: number[],
-  outward?: PlanVertex,
-): number {
-  let bestD = Infinity
-  let bestS = 0
-  let acc = 0
-  const consider = (x: number, y: number, s: number) => {
-    if (outward && (x - p.x) * outward.x + (y - p.y) * outward.y < -1e-6) return
-    const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y)
-    if (d < bestD) {
-      bestD = d
-      bestS = s
-    }
+function pointAtArc(loop: PlanVertex[], segs: number[], perim: number, s: number): PlanVertex {
+  const t = ((s % perim) + perim) % perim
+  const cum = cumulativeEnds(segs)
+  const n = loop.length
+  let lo = 0
+  let hi = n - 1
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (t <= cum[mid]!) hi = mid
+    else lo = mid + 1
   }
-  for (let i = 0; i < loop.length; i++) {
-    const a = loop[i]!
-    const b = loop[(i + 1) % loop.length]!
-    const abx = b.x - a.x
-    const aby = b.y - a.y
-    const len2 = abx * abx + aby * aby
-    const t = len2 < 1e-12 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.y - a.y) * aby) / len2))
-    consider(a.x + abx * t, a.y + aby * t, acc + t * (segs[i] ?? 0))
-    acc += segs[i] ?? 0
-  }
-  if (!Number.isFinite(bestD) && outward) return closestArcParam(p, loop, segs)
-  return bestS
+  const len = segs[lo] ?? 0
+  const u = len < 1e-12 ? 0 : (t - (cum[lo]! - len)) / len
+  const a = loop[lo]!
+  const b = loop[(lo + 1) % n]!
+  return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u }
+}
+
+function closestArcParam(p: PlanVertex, loop: PlanVertex[], outward?: PlanVertex): number {
+  return segmentIndexFor(loop).nearest(p, outward)?.s ?? 0
 }
 
 function vertexOutward(poly: PlanVertex[], i: number): PlanVertex {
@@ -130,10 +124,10 @@ function vertexOutward(poly: PlanVertex[], i: number): PlanVertex {
 }
 
 function monotoneArcParams(inner: PlanVertex[], loop: PlanVertex[], spacing: number): number[] | null {
-  const { segs, perim } = loopArcLengths(loop)
+  const { perim } = loopArcLengths(loop)
   if (perim < 1e-9) return null
   const n = inner.length
-  const raw = inner.map((p, i) => closestArcParam(p, loop, segs, vertexOutward(inner, i)))
+  const raw = inner.map((p, i) => closestArcParam(p, loop, vertexOutward(inner, i)))
   const unwrapped: number[] = [raw[0]!]
   for (let i = 1; i < n; i++) {
     let s = raw[i]!
@@ -371,7 +365,7 @@ function alignIndependentOuter(
   for (let i = 0; i < n; i++) {
     const p = innerLoop[i]!
     const hit = rayHitLoop(p, loop)
-    raw.push(hit ? hit.s : closestArcParam(p, loop, segs, vertexOutward(innerLoop, i)))
+    raw.push(hit ? hit.s : closestArcParam(p, loop, vertexOutward(innerLoop, i)))
   }
   const unwrapped = unwrapRayParams(raw, perim)
 
@@ -441,14 +435,20 @@ function alignIndependentOuter(
 /**
  * Build an organic frame by lofting the moulding profile between robust
  * disk-offsets of the sight outline. The decorative outer still fills
- * concave clefts. `u = 0` stays on the plate (mask) polyline. When
- * `pocketRing` is set (LithoLab pack + fit), that loop is the back rabbet
- * wall. When `outerRing` is set (imported + geometric outer), `u = maxU`
- * is that polygon (ray-projected, corners kept) instead of a disk offset
- * of the sight; rings past the rabbet follow that outer family.
+ * concave clefts. `u = 0` stays on the plate (mask) polyline. Each
+ * `forcedRings` entry pins the ring at its `u` to a given loop (LithoLab pack
+ * + fit for the lithophane rabbet, pack + LED gap for the acrylic band, …).
+ * When `outerRing` is set (imported + geometric outer), `u = maxU` is that
+ * polygon (ray-projected, corners kept) instead of a disk offset of the
+ * sight; rings past the back-most forced ring follow that outer family.
  */
 export const IMPORTED_LOFT_SPACING = 0.12
 export const IMPORTED_LOFT_MAX_VERTS = 5000
+
+export interface ForcedRing {
+  u: number
+  ring: PlanVertex[]
+}
 
 export function sweepOffsetLoft(
   inner: PlanVertex[],
@@ -457,8 +457,7 @@ export function sweepOffsetLoft(
     spacing?: number
     maxVerts?: number
     maxGrid?: number
-    pocketRing?: PlanVertex[] | null
-    pocketU?: number
+    forcedRings?: ForcedRing[] | null
     outerRing?: PlanVertex[] | null
     keepPlateVerts?: boolean
   } = {},
@@ -473,9 +472,16 @@ export function sweepOffsetLoft(
   const ringPerim = perimeter(sight) + 2 * Math.PI * maxU
   const count = Math.max(96, Math.min(maxVerts, Math.round(ringPerim / spacing)))
   const maxGrid = opts.maxGrid ?? 2048
-  const pocketU = opts.pocketU != null ? quantizeU(opts.pocketU) : null
-  const pocketSrc =
-    opts.pocketRing && opts.pocketRing.length >= 3 ? ensureCcw(removeDegen(opts.pocketRing)) : null
+  const maxKey = quantizeU(maxU)
+  const forced: { u: number; src: PlanVertex[] }[] = []
+  for (const f of opts.forcedRings ?? []) {
+    const u = quantizeU(f.u)
+    if (u <= 1e-6 || Math.abs(u - maxKey) < 1e-6 || u > maxKey || f.ring.length < 3) continue
+    if (forced.some((g) => Math.abs(g.u - u) < 1e-6)) continue
+    forced.push({ u, src: ensureCcw(removeDegen(f.ring)) })
+  }
+  forced.sort((a, b) => a.u - b.u)
+  const isForced = (u: number) => forced.some((f) => Math.abs(f.u - u) < 1e-6)
   const outerSrc =
     opts.outerRing && opts.outerRing.length >= 3 ? ensureCcw(removeDegen(opts.outerRing)) : null
 
@@ -483,7 +489,6 @@ export function sweepOffsetLoft(
   const cache = new Map<number, PlanVertex[]>()
   let front = opts.keepPlateVerts ? plateRing(sight, maxVerts) : alignRing(sight, count)
 
-  const maxKey = quantizeU(maxU)
   const edtRings = new Map<number, PlanVertex[]>()
   if (outerSrc) {
     const aligned = alignIndependentOuter(front, outerSrc, spacing)
@@ -498,38 +503,52 @@ export function sweepOffsetLoft(
       cache.set(maxKey, merged.outer)
     }
     for (const u of unique) {
-      if (Math.abs(u) < 1e-6 || u === maxKey) continue
-      if (pocketSrc && pocketU != null && Math.abs(u - pocketU) < 1e-6) continue
+      if (Math.abs(u) < 1e-6 || u === maxKey || isForced(u)) continue
       const off = rings.get(u)
       if (off && off.length >= 3) edtRings.set(u, off)
     }
   }
 
-  if (pocketSrc && pocketU != null && pocketU > 1e-6 && Math.abs(pocketU - maxKey) > 1e-6) {
-    const mergedPocket = mergeWalk(front, pocketSrc, spacing)
-    cache.set(pocketU, mergedPocket.outer)
-    if (mergedPocket.inner.length !== front.length) {
-      front = mergedPocket.inner
-      if (outerSrc) {
-        const remapped = alignIndependentOuter(front, outerSrc, spacing)
-        front = remapped.inner
-        cache.set(maxKey, remapped.outer)
-        cache.set(pocketU, mapOntoLoop(front, pocketSrc, spacing))
-      } else {
-        const maxCached = cache.get(maxKey)
-        if (maxCached && maxCached.length >= 3) {
-          cache.set(maxKey, mapOntoLoop(front, maxCached, spacing))
-        }
+  // The outermost forced ring has the longest convex caps, so it alone decides
+  // which front vertices to insert; merging every ring in turn would densify the
+  // front once per ring. Inner forced rings are then mapped onto the final front.
+  let changed = false
+  const lead = forced[forced.length - 1]
+  if (lead) {
+    const merged = mergeWalk(front, lead.src, spacing)
+    cache.set(lead.u, merged.outer)
+    if (merged.inner.length !== front.length) {
+      front = merged.inner
+      changed = true
+    }
+  }
+  if (changed) {
+    if (outerSrc) {
+      const remapped = alignIndependentOuter(front, outerSrc, spacing)
+      front = remapped.inner
+      cache.set(maxKey, remapped.outer)
+      for (const f of forced) cache.set(f.u, mapOntoLoop(front, f.src, spacing))
+    } else {
+      const maxCached = cache.get(maxKey)
+      if (maxCached && maxCached.length >= 3) {
+        cache.set(maxKey, mapOntoLoop(front, maxCached, spacing))
       }
     }
   }
+  for (const f of forced) {
+    if (cache.get(f.u)?.length !== front.length) cache.set(f.u, mapOntoLoop(front, f.src, spacing))
+  }
   cache.set(0, front)
 
-  const pocketCached = pocketU != null ? cache.get(pocketU) : null
+  const knots: { u: number; ring: PlanVertex[] }[] = [{ u: 0, ring: front }]
+  for (const f of forced) {
+    const ring = cache.get(f.u)
+    if (ring && ring.length === front.length) knots.push({ u: f.u, ring })
+  }
+  const wellU = knots[knots.length - 1]!.u
   const outerCached = cache.get(maxKey)
   let geomInset: PlanVertex[] | null = null
   if (outerSrc && outerCached && outerCached.length === front.length) {
-    const wellU = pocketU != null && pocketU > 1e-6 ? pocketU : 0
     const insetDist = Math.max(0, maxU - wellU)
     const insetLoop =
       insetDist > 1e-6
@@ -545,11 +564,14 @@ export function sweepOffsetLoft(
     }
     if (cache.has(u) && cache.get(u)!.length === front.length) continue
     if (outerSrc && outerCached && outerCached.length === front.length) {
-      if (pocketU != null && pocketCached && pocketCached.length === front.length && pocketU > 1e-6 && u <= pocketU) {
-        const t = pocketU < 1e-9 ? 0 : u / pocketU
-        cache.set(u, lerpRings(front, pocketCached, t))
+      if (knots.length > 1 && u <= wellU) {
+        let k = 1
+        while (k < knots.length - 1 && knots[k]!.u < u) k++
+        const a = knots[k - 1]!
+        const b = knots[k]!
+        const t = b.u - a.u < 1e-9 ? 0 : (u - a.u) / (b.u - a.u)
+        cache.set(u, lerpRings(a.ring, b.ring, Math.max(0, Math.min(1, t))))
       } else if (geomInset && geomInset.length === front.length) {
-        const wellU = pocketU != null && pocketU > 1e-6 ? pocketU : 0
         const span = maxU - wellU
         const t = span < 1e-9 ? 1 : (u - wellU) / span
         cache.set(u, lerpRings(geomInset, outerCached, Math.max(0, Math.min(1, t))))

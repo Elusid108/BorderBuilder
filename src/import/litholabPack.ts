@@ -1,6 +1,8 @@
 import JSZip from 'jszip'
 import { offsetLoop } from '../geom/offset.ts'
 import { offsetLoopMiter } from '../geom/miterSweep.ts'
+import { clipperOffset, loadedManifold } from '../geom/manifold.ts'
+import { ensureCcw, simplifyClosed } from '../geom/plan.ts'
 import type { FrameParams, PlanVertex } from '../geom/types.ts'
 
 export const PROJECT_SCHEMA_VERSION = 1
@@ -228,33 +230,60 @@ export function mapPackToFrameParams(json: ProjectJsonV1, current: FrameParams):
   }
 }
 
+/** Douglas–Peucker tolerance for the pack outline; Chaikin leaves ~0.01 mm vertex spacing otherwise. */
+export const PACK_OUTLINE_TOLERANCE_MM = 0.005
+
 /** LithoLab pack outer (magenta): disk offset of the mask with Chaikin, not a routed spline. */
 export function packOutlineFromPlan(maskPlan: PlanVertex[], borderMm: number): PlanVertex[] {
   if (!(borderMm > 1e-9)) return maskPlan
-  return (
-    offsetLoop(maskPlan, borderMm, {
-      maxGrid: 2048,
-      cellSize: Math.max(borderMm / 12, 1e-6),
-      smoothRouted: false,
-      smoothIters: 4,
-    }) ?? maskPlan
-  )
+  const loop = offsetLoop(maskPlan, borderMm, {
+    maxGrid: 2048,
+    cellSize: Math.max(borderMm / 12, 1e-6),
+    smoothRouted: false,
+    smoothIters: 4,
+  })
+  return loop ? simplifyClosed(loop, PACK_OUTLINE_TOLERANCE_MM) : maskPlan
+}
+
+const packRingCache = new WeakMap<PlanVertex[], Map<number, PlanVertex[]>>()
+
+/**
+ * Parallel of the pack outline at `delta` mm (miter joins, EDT fallback when
+ * the miter self-intersects). Memoised per outline array and delta.
+ */
+export function packRing(packOutline: PlanVertex[], delta: number): PlanVertex[] {
+  if (!(delta > 1e-9)) return packOutline
+  const key = Math.round(delta * 1000) / 1000
+  let byDelta = packRingCache.get(packOutline)
+  if (!byDelta) {
+    byDelta = new Map()
+    packRingCache.set(packOutline, byDelta)
+  }
+  const hit = byDelta.get(key)
+  if (hit) return hit
+  const mitered = offsetLoopMiter(packOutline, delta)
+  // Concave corners tighter than `delta` make the per-vertex miter self-intersect:
+  // use Clipper2 when the kernel is loaded (worker, self-check), else a fine EDT.
+  const wasm = mitered && mitered.length >= 3 ? null : loadedManifold()
+  const clipped = wasm ? clipperOffset(wasm, ensureCcw(packOutline), delta) : null
+  const ring =
+    mitered && mitered.length >= 3
+      ? mitered
+      : clipped && clipped.length >= 3
+        ? clipped
+        : (offsetLoop(packOutline, delta, {
+            maxGrid: 4096,
+            cellSize: Math.max(delta / 24, 0.03),
+            smoothRouted: false,
+            smoothIters: 0,
+          }) ?? packOutline)
+  byDelta.set(key, ring)
+  return ring
 }
 
 /** Back rabbet wall: pack outline plus fit clearance (miter parallel, no Chaikin). */
 export function pocketRingFromPack(packOutline: PlanVertex[], fitMm: number): PlanVertex[] {
-  const fit = Math.max(PACK_XY_FIT_MM, fitMm)
-  if (!(fit > 1e-9)) return packOutline
-  const mitered = offsetLoopMiter(packOutline, fit)
-  if (mitered && mitered.length >= 3) return mitered
-  return (
-    offsetLoop(packOutline, fit, {
-      maxGrid: 4096,
-      cellSize: Math.max(fit / 24, 0.03),
-      smoothRouted: false,
-      smoothIters: 0,
-    }) ?? packOutline
-  )
+  return packRing(packOutline, Math.max(PACK_XY_FIT_MM, fitMm))
 }
 
 export function silhouetteSizeMm(
