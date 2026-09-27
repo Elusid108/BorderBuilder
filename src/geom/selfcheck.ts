@@ -9,9 +9,12 @@ import { compositeArtworkRgba } from '../preview/artwork.ts'
 import { buildProfile } from './profiles.ts'
 import { buildRectFrame, presetOuterLoop, suggestedImportedOuter } from './rectFrame.ts'
 import { meshToBinaryStl } from './stl.ts'
-import { DEFAULT_PARAMS, PROFILE_DEFS, type FrameParams, type Mesh, type PlanVertex, type ProfileId } from './types.ts'
+import { DEFAULT_PARAMS as SHIPPED_DEFAULTS, NO_CHAMFER, PROFILE_DEFS, type FrameParams, type Mesh, type PlanVertex, type ProfileId } from './types.ts'
 import { inspectMesh } from './validate.ts'
 import { mapPackToFrameParams, PACK_XY_FIT_MM, packOutlineFromPlan, pocketRingFromPack, unpackLitholabPack, type ProjectJsonV1 } from '../import/litholabPack.ts'
+
+/** Legacy checks run on the v0.6.1 section (no chamfers); chamfer / backlight checks opt in. */
+const DEFAULT_PARAMS: FrameParams = { ...SHIPPED_DEFAULTS, chamfer: NO_CHAMFER }
 
 function assert(cond: boolean, message: string): void {
   if (!cond) throw new Error(message)
@@ -319,7 +322,7 @@ function checkRabbetFollowsPack(sight: PlanVertex[], border: number, fit: number
     fitClearance: fit,
     profile: 'flat',
   }
-  const mesh = buildFrame(params, sight, pocket)
+  const mesh = buildFrame(params, sight, pack)
   const report = inspectMesh(mesh)
   assert(report.watertight, `${label}: not watertight open=${report.openEdges} nm=${report.nonManifoldEdges}`)
 
@@ -396,7 +399,6 @@ function frontInnerXY(mesh: Mesh, mouldingHeight: number, rabbetDepth: number): 
 
 function checkFrontFollowsMask(sight: PlanVertex[], border: number, fit: number, moulding: number, label: string): void {
   const pack = packOutlineFromPlan(sight, border)
-  const pocket = pocketRingFromPack(pack, fit)
   const rw = border + fit
   const mh = 15
   const rd = 4
@@ -412,7 +414,7 @@ function checkFrontFollowsMask(sight: PlanVertex[], border: number, fit: number,
     fitClearance: fit,
     profile: 'flat',
   }
-  const mesh = buildFrame(params, sight, pocket)
+  const mesh = buildFrame(params, sight, pack)
   const report = inspectMesh(mesh)
   assert(report.watertight, `${label}: not watertight open=${report.openEdges} nm=${report.nonManifoldEdges}`)
 
@@ -453,7 +455,6 @@ function checkImportedGeometricOuter(
   label: string,
 ): void {
   const pack = packOutlineFromPlan(sight, border)
-  const pocket = pocketRingFromPack(pack, fit)
   const suggested = suggestedImportedOuter(sight, moulding, shape)
   const rw = border + fit
   const params: FrameParams = {
@@ -468,7 +469,7 @@ function checkImportedGeometricOuter(
     fitClearance: fit,
     profile: 'flat',
   }
-  const mesh = buildFrame(params, sight, pocket)
+  const mesh = buildFrame(params, sight, pack)
   const report = inspectMesh(mesh)
   assert(report.watertight, `${label}: not watertight open=${report.openEdges} nm=${report.nonManifoldEdges}`)
   const spanX = report.bounds.max.x - report.bounds.min.x
@@ -823,7 +824,7 @@ const heartParams: FrameParams = {
 const heartPacked = buildFrame(
   { ...heartParams, rabbetWidth: 3.8, fitClearance: 0.8 },
   heartSight,
-  pocketRingFromPack(packOutlineFromPlan(heartSight, 3), 0.8),
+  packOutlineFromPlan(heartSight, 3),
 )
 const heartPackedReport = inspectMesh(heartPacked)
 assert(

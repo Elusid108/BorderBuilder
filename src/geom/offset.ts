@@ -3,6 +3,7 @@ import { ensureCcw, largestLoop, polygonBounds, smoothChaikin, smoothRoutedPath,
 import type { PlanVertex } from './types.ts'
 
 const INF = 1e20
+const FAR = 1e5
 const DEFAULT_CELL_MM = 0.25
 
 export type OffsetOpts = {
@@ -26,24 +27,51 @@ export function rasterizePolygonsBinary(
 ): Uint8Array {
   const out = new Uint8Array(width * height)
   if (set.length === 0) return out
-  const edges: Array<{ ax: number; ay: number; bx: number; by: number }> = []
+  const ax: number[] = []
+  const ay: number[] = []
+  const bx: number[] = []
+  const by: number[] = []
   for (const loop of set) {
     for (let i = 0; i < loop.length; i++) {
       const a = loop[i]!
       const b = loop[(i + 1) % loop.length]!
-      edges.push({ ax: a.x, ay: a.y, bx: b.x, by: b.y })
+      ax.push(a.x)
+      ay.push(a.y)
+      bx.push(b.x)
+      by.push(b.y)
     }
   }
+  // Bucket each edge into the rows its y-span can cross (±1 row margin; the exact test runs per row).
+  const rowOf = (yw: number) => Math.floor((yw - originY) / cellSize - 0.5)
+  const counts = new Int32Array(height + 1)
+  const span = (e: number): [number, number] => {
+    const lo = Math.max(0, rowOf(Math.min(ay[e]!, by[e]!)))
+    const hi = Math.min(height - 1, rowOf(Math.max(ay[e]!, by[e]!)) + 1)
+    return [lo, hi]
+  }
+  for (let e = 0; e < ax.length; e++) {
+    const [lo, hi] = span(e)
+    for (let y = lo; y <= hi; y++) counts[y + 1]!++
+  }
+  for (let y = 1; y <= height; y++) counts[y] = counts[y]! + counts[y - 1]!
+  const items = new Int32Array(counts[height]!)
+  const fill = counts.slice(0, height)
+  for (let e = 0; e < ax.length; e++) {
+    const [lo, hi] = span(e)
+    for (let y = lo; y <= hi; y++) items[fill[y]!++] = e
+  }
+
   const xs: number[] = []
   for (let y = 0; y < height; y++) {
     const yWorld = originY + (y + 0.5) * cellSize
     xs.length = 0
-    for (const e of edges) {
-      const ay = e.ay
-      const by = e.by
-      if ((ay <= yWorld && by > yWorld) || (by <= yWorld && ay > yWorld)) {
-        const t = (yWorld - ay) / (by - ay)
-        xs.push(e.ax + t * (e.bx - e.ax))
+    for (let k = counts[y]!; k < counts[y + 1]!; k++) {
+      const e = items[k]!
+      const eay = ay[e]!
+      const eby = by[e]!
+      if ((eay <= yWorld && eby > yWorld) || (eby <= yWorld && eay > yWorld)) {
+        const t = (yWorld - eay) / (eby - eay)
+        xs.push(ax[e]! + t * (bx[e]! - ax[e]!))
       }
     }
     if (xs.length < 2) continue
@@ -60,9 +88,8 @@ export function rasterizePolygonsBinary(
   return out
 }
 
-function edt1d(f: Float64Array, n: number): Float64Array {
-  const v = new Int32Array(n)
-  const z = new Float64Array(n + 1)
+/** Felzenszwalb 1D squared EDT of `f[0..n)` into `d`, using caller scratch `v`, `z`. */
+function edt1d(f: Float64Array, n: number, d: Float64Array, v: Int32Array, z: Float64Array): void {
   let k = 0
   v[0] = 0
   z[0] = -INF
@@ -78,30 +105,42 @@ function edt1d(f: Float64Array, n: number): Float64Array {
     z[k] = s
     z[k + 1] = +INF
   }
-  const D = new Float64Array(n)
   k = 0
   for (let q = 0; q < n; q++) {
     while (z[k + 1]! < q) k++
-    D[q] = (q - v[k]!) * (q - v[k]!) + f[v[k]!]!
+    d[q] = (q - v[k]!) * (q - v[k]!) + f[v[k]!]!
   }
-  return D
 }
 
 function edtSquaredFromInside(inside: Uint8Array, w: number, h: number): Float64Array {
   const D = new Float64Array(w * h)
-  const col = new Float64Array(h)
+  const m = Math.max(w, h)
+  const f = new Float64Array(m)
+  const d = new Float64Array(m)
+  const v = new Int32Array(m)
+  const z = new Float64Array(m + 1)
   for (let x = 0; x < w; x++) {
-    for (let y = 0; y < h; y++) col[y] = inside[y * w + x] ? 0 : INF
-    const r = edt1d(col, h)
-    for (let y = 0; y < h; y++) D[y * w + x] = r[y]!
+    for (let y = 0; y < h; y++) f[y] = inside[y * w + x] ? 0 : INF
+    edt1d(f, h, d, v, z)
+    for (let y = 0; y < h; y++) D[y * w + x] = d[y]!
   }
-  const row = new Float64Array(w)
   for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) row[x] = D[y * w + x]!
-    const r = edt1d(row, w)
-    for (let x = 0; x < w; x++) D[y * w + x] = r[x]!
+    const row = y * w
+    for (let x = 0; x < w; x++) f[x] = D[row + x]!
+    edt1d(f, w, d, v, z)
+    for (let x = 0; x < w; x++) D[row + x] = d[x]!
   }
   return D
+}
+
+/** Euclidean distance (cells) to the nearest inside cell; `FAR` where nothing is inside. */
+function distanceField(distSq: Float64Array): Float64Array {
+  const out = new Float64Array(distSq.length)
+  for (let i = 0; i < distSq.length; i++) {
+    const d = distSq[i]!
+    out[i] = d >= INF * 0.5 ? FAR : Math.sqrt(d)
+  }
+  return out
 }
 
 function chooseGrid(
@@ -123,15 +162,6 @@ function chooseGrid(
   return { cellSize, w, h }
 }
 
-function levelOutward(distSq: Float64Array, dCells: number): Float64Array {
-  const level = new Float64Array(distSq.length)
-  for (let i = 0; i < distSq.length; i++) {
-    const d = distSq[i]!
-    level[i] = d >= INF * 0.5 ? dCells + 8 : Math.sqrt(d) - dCells
-  }
-  return level
-}
-
 function toWorldAndSmooth(
   gridPolys: PlanLoop[],
   ox: number,
@@ -151,7 +181,7 @@ function toWorldAndSmooth(
 }
 
 function extractOutwardIso(
-  distSq: Float64Array,
+  dist: Float64Array,
   w: number,
   h: number,
   dCells: number,
@@ -160,7 +190,7 @@ function extractOutwardIso(
   cellSize: number,
   opts: OffsetOpts,
 ): PlanLoop[] {
-  const gridPolys = extractPolygonsFromScalar(levelOutward(distSq, dCells), w, h)
+  const gridPolys = extractPolygonsFromScalar(dist, w, h, dCells)
   return toWorldAndSmooth(gridPolys, ox, oy, cellSize, opts)
 }
 
@@ -197,8 +227,8 @@ export function offsetPolygonSet(set: PlanLoop[], delta: number, opts: OffsetOpt
     return toWorldAndSmooth(extractPolygonsFromScalar(level, w, h), ox, oy, cellSize, opts)
   }
 
-  const distSq = edtSquaredFromInside(inside, w, h)
-  return extractOutwardIso(distSq, w, h, dCells, ox, oy, cellSize, opts)
+  const dist = distanceField(edtSquaredFromInside(inside, w, h))
+  return extractOutwardIso(dist, w, h, dCells, ox, oy, cellSize, opts)
 }
 
 /** Outward (positive) or inward disk offset of a single loop. Largest result loop, or null if empty. */
@@ -231,10 +261,10 @@ export function offsetLoopAtDeltas(
   const ox = b.minX - pad
   const oy = b.minY - pad
   const inside = rasterizePolygonsBinary([poly], w, h, ox, oy, cellSize)
-  const distSq = edtSquaredFromInside(inside, w, h)
+  const dist = distanceField(edtSquaredFromInside(inside, w, h))
 
   for (const delta of positive) {
-    const loops = extractOutwardIso(distSq, w, h, delta / cellSize, ox, oy, cellSize, opts)
+    const loops = extractOutwardIso(dist, w, h, delta / cellSize, ox, oy, cellSize, opts)
     out.set(delta, largestLoop(loops))
   }
   return out

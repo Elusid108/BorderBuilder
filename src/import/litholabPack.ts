@@ -241,20 +241,39 @@ export function packOutlineFromPlan(maskPlan: PlanVertex[], borderMm: number): P
   )
 }
 
+const packRingCache = new WeakMap<PlanVertex[], Map<number, PlanVertex[]>>()
+
+/**
+ * Parallel of the pack outline at `delta` mm (miter joins, EDT fallback when
+ * the miter self-intersects). Memoised per outline array and delta.
+ */
+export function packRing(packOutline: PlanVertex[], delta: number): PlanVertex[] {
+  if (!(delta > 1e-9)) return packOutline
+  const key = Math.round(delta * 1000) / 1000
+  let byDelta = packRingCache.get(packOutline)
+  if (!byDelta) {
+    byDelta = new Map()
+    packRingCache.set(packOutline, byDelta)
+  }
+  const hit = byDelta.get(key)
+  if (hit) return hit
+  const mitered = offsetLoopMiter(packOutline, delta)
+  const ring =
+    mitered && mitered.length >= 3
+      ? mitered
+      : (offsetLoop(packOutline, delta, {
+          maxGrid: 4096,
+          cellSize: Math.max(delta / 24, 0.03),
+          smoothRouted: false,
+          smoothIters: 0,
+        }) ?? packOutline)
+  byDelta.set(key, ring)
+  return ring
+}
+
 /** Back rabbet wall: pack outline plus fit clearance (miter parallel, no Chaikin). */
 export function pocketRingFromPack(packOutline: PlanVertex[], fitMm: number): PlanVertex[] {
-  const fit = Math.max(PACK_XY_FIT_MM, fitMm)
-  if (!(fit > 1e-9)) return packOutline
-  const mitered = offsetLoopMiter(packOutline, fit)
-  if (mitered && mitered.length >= 3) return mitered
-  return (
-    offsetLoop(packOutline, fit, {
-      maxGrid: 4096,
-      cellSize: Math.max(fit / 24, 0.03),
-      smoothRouted: false,
-      smoothIters: 0,
-    }) ?? packOutline
-  )
+  return packRing(packOutline, Math.max(PACK_XY_FIT_MM, fitMm))
 }
 
 export function silhouetteSizeMm(

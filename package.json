@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "check:geom": "tsx src/geom/selfcheck.ts"
+    "check:geom": "tsx src/geom/selfcheck.ts",
+    "bench:geom": "tsx src/geom/bench.ts"
   },
   "dependencies": {
     "jszip": "^3.10.1",

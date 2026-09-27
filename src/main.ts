@@ -29,7 +29,6 @@ import {
   PACK_XY_FIT_MM,
   mapPackToFrameParams,
   packOutlineFromPlan,
-  pocketRingFromPack,
   silhouetteSizeMm,
   unpackLitholabPack,
 } from './import/litholabPack.ts'
@@ -285,10 +284,6 @@ function syncArtwork(params: FrameParams): void {
   })
 }
 
-function importedPocket(params: FrameParams): PlanVertex[] | null {
-  if (!imported?.packOutline.length) return null
-  return pocketRingFromPack(imported.packOutline, params.fitClearance)
-}
 
 function syncImportedFit(params: FrameParams): FrameParams {
   if (!imported) return params
@@ -302,7 +297,7 @@ function syncImportedFit(params: FrameParams): FrameParams {
   if (fitInput && Math.abs(params.fitClearance - fit) > 1e-6) fitInput.value = formatMm(fit)
   if (rabbet && Math.abs(params.rabbetWidth - rw) > 1e-6) rabbet.value = formatMm(rw)
   if (moulding && Math.abs(params.mouldingWidth - mouldingWidth) > 1e-6) moulding.value = formatMm(mouldingWidth)
-  return { ...params, fitClearance: fit, rabbetWidth: rw, mouldingWidth }
+  return { ...params, fitClearance: fit, rabbetWidth: rw, mouldingWidth, packBorder: imported.packBorder }
 }
 
 function applyImportedShapeSize(shape: ShapeKind): void {
@@ -420,7 +415,7 @@ function rebuild(fitNote?: string): void {
   }
 
   try {
-    const mesh = buildFrame(params, imported?.sight, importedPocket(params))
+    const mesh = buildFrame(params, imported?.sight, imported?.packOutline)
     const report = inspectMesh(mesh)
     viewer.setMesh(mesh, {
       smooth:

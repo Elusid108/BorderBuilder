@@ -1,5 +1,5 @@
-import { effectiveLipWidth, effectiveRabbetDepth } from './derived.ts'
-import type { FrameParams, ProfileId, ProfilePoint } from './types.ts'
+import { effectiveLipWidth, rabbetSteps, totalRabbetDepth } from './derived.ts'
+import type { FrameParams, ProfileId, ProfilePoint, RabbetStep } from './types.ts'
 
 const CURVE_SEGMENTS = 18
 
@@ -22,7 +22,7 @@ export function resolveFaceLayout(params: FrameParams): FaceLayout {
   const width = params.mouldingWidth
   const height = params.mouldingHeight
   const rw = params.rabbetWidth
-  const rd = effectiveRabbetDepth(params)
+  const rd = totalRabbetDepth(params)
   const lip = effectiveLipWidth(params)
   const depth = clamp(params.faceDepth, 0, 1)
   const span = Math.max(0, width - lip)
@@ -107,14 +107,49 @@ function startLip(layout: FaceLayout): ProfilePoint[] {
   ]
 }
 
-function rabbetAndInner(width: number, height: number, rw: number, rd: number): ProfilePoint[] {
-  return [
-    { u: width, v: 0 },
-    { u: rw, v: 0 },
-    { u: rw, v: rd },
-    { u: 0, v: rd },
-    { u: 0, v: height },
-  ]
+/**
+ * Back side of the section: outer wall down to the back face, then the rabbet
+ * staircase (back-most step first) up to the front-most rabbet shelf and the
+ * sight wall. Optional chamfers on the back-outer edge and the rabbet mouth.
+ */
+function backAndRabbets(
+  width: number,
+  height: number,
+  steps: RabbetStep[],
+  backChamfer: number,
+  mouthChamfer: number,
+  sightChamfer: number,
+): ProfilePoint[] {
+  const back = [...steps].reverse()
+  const pts: ProfilePoint[] = []
+  if (backChamfer > 0) {
+    pts.push({ u: width, v: backChamfer }, { u: width - backChamfer, v: 0 })
+  } else {
+    pts.push({ u: width, v: 0 })
+  }
+  const mouth = back[0]!
+  if (mouthChamfer > 0) {
+    pts.push({ u: mouth.u + mouthChamfer, v: 0 }, { u: mouth.u, v: mouthChamfer })
+  } else {
+    pts.push({ u: mouth.u, v: 0 })
+  }
+  let v = 0
+  for (let j = 0; j < back.length; j++) {
+    v += back[j]!.depth
+    pts.push({ u: back[j]!.u, v })
+    pts.push({ u: j + 1 < back.length ? back[j + 1]!.u : 0, v })
+  }
+  pts.push({ u: 0, v: height - sightChamfer })
+  return pts
+}
+
+/** Chamfer the front sight edge when the face starts with a flat landing wide enough for it. */
+function chamferSightEdge(face: ProfilePoint[], c: number): { face: ProfilePoint[]; used: number } {
+  const first = face[0]
+  const second = face[1]
+  if (!(c > 0) || !first || !second) return { face, used: 0 }
+  if (Math.abs(second.v - first.v) > 1e-6 || second.u < c + 0.05) return { face, used: 0 }
+  return { face: [{ u: 0, v: first.v - c }, { u: c, v: first.v }, ...face.slice(1)], used: c }
 }
 
 function flatFace(layout: FaceLayout): ProfilePoint[] {
@@ -405,7 +440,39 @@ function facePolyline(id: ProfileId, layout: FaceLayout): ProfilePoint[] {
  */
 export function buildProfile(params: FrameParams): ProfilePoint[] {
   const layout = resolveFaceLayout(params)
-  const face = clampFace(facePolyline(params.profile, layout), layout)
-  const rest = rabbetAndInner(layout.width, layout.height, layout.rw, layout.rd)
-  return dedupe([...face, ...rest])
+  const steps = rabbetSteps(params)
+  const backU = steps[steps.length - 1]!.u
+  const skin = layout.height - layout.rd
+  const face0 = clampFace(facePolyline(params.profile, layout), layout)
+  const sightMax = Math.max(0, skin - 0.4)
+  const sight = chamferSightEdge(face0, Math.min(params.chamfer.sight, sightMax))
+  const faceEnd = sight.face[sight.face.length - 1]!
+  const outerRoom = layout.width - backU
+  const backChamfer = clamp(
+    Math.min(params.chamfer.backOuter, faceEnd.v - 0.2, outerRoom * 0.4),
+    0,
+    Infinity,
+  )
+  const mouthChamfer = clamp(
+    Math.min(params.chamfer.rabbetMouth, steps[steps.length - 1]!.depth - 0.2, outerRoom - backChamfer - 0.4),
+    0,
+    Infinity,
+  )
+  const rest = backAndRabbets(layout.width, layout.height, steps, backChamfer, mouthChamfer, sight.used)
+  return dedupe([...sight.face, ...rest])
+}
+
+/** Profile `u` values that sit on the lithophane-pack family of rings (rabbet walls + mouth chamfer). */
+export function rabbetWallUs(params: FrameParams): { u: number; packDelta: number }[] {
+  const steps = rabbetSteps(params)
+  const edge = params.packBorder ?? 0
+  const out = steps.map((st) => ({ u: st.u, packDelta: st.u - edge }))
+  const profile = buildProfile(params)
+  const back = steps[steps.length - 1]!
+  const mouthU = Math.min(
+    ...profile.filter((p) => Math.abs(p.v) < 1e-9 && p.u > back.u + 1e-6 && p.u < params.mouldingWidth - 1e-6).map((p) => p.u),
+  )
+  const outerBack = Math.max(...profile.filter((p) => Math.abs(p.v) < 1e-9).map((p) => p.u))
+  if (Number.isFinite(mouthU) && mouthU < outerBack - 1e-6) out.push({ u: mouthU, packDelta: mouthU - edge })
+  return out
 }

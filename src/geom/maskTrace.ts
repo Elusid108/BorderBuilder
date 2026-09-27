@@ -159,21 +159,8 @@ export function extractPolygonsFromBinary(inside: Uint8Array, w: number, h: numb
   return stitchSegments(segHeads)
 }
 
-function gridEdgeKey(cx: number, cy: number, edge: number): string {
-  switch (edge) {
-    case 0:
-      return `h:${cx}:${cy}`
-    case 1:
-      return `v:${cx + 1}:${cy}`
-    case 2:
-      return `h:${cx}:${cy + 1}`
-    default:
-      return `v:${cx}:${cy}`
-  }
-}
-
-function lerpIso(vA: number, vB: number, ax: number, ay: number, bx: number, by: number): PlanVertex {
-  const t = Math.abs(vB - vA) < 1e-12 ? 0.5 : (0 - vA) / (vB - vA)
+function lerpIso(vA: number, vB: number, iso: number, ax: number, ay: number, bx: number, by: number): PlanVertex {
+  const t = Math.abs(vB - vA) < 1e-12 ? 0.5 : (iso - vA) / (vB - vA)
   const u = Math.min(1, Math.max(0, t))
   return { x: ax + (bx - ax) * u, y: ay + (by - ay) * u }
 }
@@ -186,24 +173,41 @@ function isoEdgePoint(
   v10: number,
   v11: number,
   v01: number,
+  iso: number,
 ): PlanVertex {
   const x0 = cx + 0.5
   const y0 = cy + 0.5
   switch (edge) {
     case 0:
-      return lerpIso(v00, v10, x0, y0, x0 + 1, y0)
+      return lerpIso(v00, v10, iso, x0, y0, x0 + 1, y0)
     case 1:
-      return lerpIso(v10, v11, x0 + 1, y0, x0 + 1, y0 + 1)
+      return lerpIso(v10, v11, iso, x0 + 1, y0, x0 + 1, y0 + 1)
     case 2:
-      return lerpIso(v11, v01, x0 + 1, y0 + 1, x0, y0 + 1)
+      return lerpIso(v11, v01, iso, x0 + 1, y0 + 1, x0, y0 + 1)
     default:
-      return lerpIso(v00, v01, x0, y0, x0, y0 + 1)
+      return lerpIso(v00, v01, iso, x0, y0, x0, y0 + 1)
   }
 }
 
-/** Marching squares on a scalar field. Values ≤ 0 are inside; crossings are interpolated. */
-export function extractPolygonsFromScalar(field: Float64Array, w: number, h: number): PlanLoop[] {
-  const segHeads = new Map<string, Array<{ to: PlanVertex; toKey: string }>>()
+/**
+ * Marching squares on a scalar field. Values ≤ `iso` are inside; crossings are
+ * interpolated. Grid edges are keyed numerically so stitching avoids string churn.
+ */
+export function extractPolygonsFromScalar(field: ArrayLike<number>, w: number, h: number, iso = 0): PlanLoop[] {
+  const stride = w + 2
+  const edgeKey = (cx: number, cy: number, edge: number): number => {
+    switch (edge) {
+      case 0:
+        return ((cy + 1) * stride + (cx + 1)) * 2
+      case 1:
+        return ((cy + 1) * stride + (cx + 2)) * 2 + 1
+      case 2:
+        return ((cy + 2) * stride + (cx + 1)) * 2
+      default:
+        return ((cy + 1) * stride + (cx + 1)) * 2 + 1
+    }
+  }
+  const next = new Map<number, Array<{ to: PlanVertex; toKey: number }>>()
   const at = (x: number, y: number): number => {
     if (x < 0 || y < 0 || x >= w || y >= h) return 1e6
     return field[y * w + x] ?? 1e6
@@ -216,15 +220,41 @@ export function extractPolygonsFromScalar(field: Float64Array, w: number, h: num
       const v11 = at(cx + 1, cy + 1)
       const v01 = at(cx, cy + 1)
       const code =
-        (v00 <= 0 ? 1 : 0) | (v10 <= 0 ? 2 : 0) | (v11 <= 0 ? 4 : 0) | (v01 <= 0 ? 8 : 0)
-      const segs = MS_TABLE[code] ?? []
-      for (const [a, b] of segs) {
-        const pb = isoEdgePoint(cx, cy, b, v00, v10, v11, v01)
-        pushSeg(segHeads, gridEdgeKey(cx, cy, a), pb, gridEdgeKey(cx, cy, b))
+        (v00 <= iso ? 1 : 0) | (v10 <= iso ? 2 : 0) | (v11 <= iso ? 4 : 0) | (v01 <= iso ? 8 : 0)
+      if (code === 0 || code === 15) continue
+      for (const [a, b] of MS_TABLE[code]!) {
+        const pb = isoEdgePoint(cx, cy, b, v00, v10, v11, v01, iso)
+        const ka = edgeKey(cx, cy, a)
+        let list = next.get(ka)
+        if (!list) {
+          list = []
+          next.set(ka, list)
+        }
+        list.push({ to: pb, toKey: edgeKey(cx, cy, b) })
       }
     }
   }
-  return stitchSegments(segHeads)
+  const loops: PlanLoop[] = []
+  while (next.size > 0) {
+    const startKey = next.keys().next().value as number
+    const loop: PlanLoop = []
+    let key = startKey
+    let safety = 4_000_000
+    while (safety-- > 0) {
+      const choices = next.get(key)
+      if (!choices || choices.length === 0) {
+        next.delete(key)
+        break
+      }
+      const step = choices.shift()!
+      if (choices.length === 0) next.delete(key)
+      loop.push(step.to)
+      key = step.toKey
+      if (key === startKey) break
+    }
+    if (loop.length >= 3) loops.push(loop)
+  }
+  return loops
 }
 
 export function extractMaskPolygons(
