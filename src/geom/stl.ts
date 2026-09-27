@@ -1,3 +1,4 @@
+import type { IndexedMesh } from './indexed.ts'
 import type { Mesh, Vec3 } from './types.ts'
 
 function normalOf(a: Vec3, b: Vec3, c: Vec3): Vec3 {
@@ -49,4 +50,41 @@ export function downloadStl(buffer: ArrayBuffer, filename: string): void {
   a.download = filename
   a.click()
   URL.revokeObjectURL(url)
+}
+
+/** Binary STL from an indexed mesh. */
+export function indexedToBinaryStl(mesh: IndexedMesh, header = 'BorderBuilder'): ArrayBuffer {
+  const count = mesh.indices.length / 3
+  const buffer = new ArrayBuffer(84 + count * 50)
+  const view = new DataView(buffer)
+  const bytes = new TextEncoder().encode(header)
+  for (let i = 0; i < 80; i++) view.setUint8(i, i < bytes.length ? bytes[i]! : 0x20)
+  view.setUint32(80, count, true)
+  const p = mesh.positions
+  const at = (k: number): Vec3 => {
+    const i = mesh.indices[k]! * 3
+    return { x: p[i]!, y: p[i + 1]!, z: p[i + 2]! }
+  }
+  let offset = 84
+  for (let t = 0; t < count; t++) {
+    const a = at(t * 3)
+    const b = at(t * 3 + 1)
+    const c = at(t * 3 + 2)
+    writeVec(view, offset, normalOf(a, b, c))
+    writeVec(view, offset + 12, a)
+    writeVec(view, offset + 24, b)
+    writeVec(view, offset + 36, c)
+    view.setUint16(offset + 48, 0, true)
+    offset += 50
+  }
+  return buffer
+}
+
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }

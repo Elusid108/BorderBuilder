@@ -1,5 +1,12 @@
-import { deriveSizes, maxLipWidth, validateParams } from './geom/derived.ts'
-import { buildFrame, downloadName, frameSummary, importedFrameSummary } from './geom/frame.ts'
+import {
+  deriveSizes,
+  maxLipWidth,
+  minMouldingHeight,
+  minMouldingWidth,
+  totalRabbetDepth,
+  validateParams,
+} from './geom/derived.ts'
+import { downloadName, frameSummary, importedFrameSummary } from './geom/frame.ts'
 import {
   extractMaskPolygons,
   sightFromMaskImage,
@@ -10,19 +17,19 @@ import {
 } from './geom/maskTrace.ts'
 import { compositeArtworkRgba, rgbaToPngBlob } from './preview/artwork.ts'
 import { buildProfile } from './geom/profiles.ts'
-import { downloadStl, meshToBinaryStl } from './geom/stl.ts'
+import { downloadBlob } from './geom/stl.ts'
 import {
+  ACRYLIC_PRESETS,
   DEFAULT_PARAMS,
   PROFILE_DEFS,
   PROFILE_GROUPS,
+  acrylicPreset,
   isRadiusShape,
+  type AcrylicPresetId,
   type FrameParams,
-  type Mesh,
   type PlanVertex,
   type ShapeKind,
 } from './geom/types.ts'
-import { isPolygonalOutline } from './geom/plan.ts'
-import { inspectMesh } from './geom/validate.ts'
 import { rgbaFromBlob } from './import/imageData.ts'
 import {
   MIN_MOULDING_OVER_RABBET_MM,
@@ -32,11 +39,13 @@ import {
   silhouetteSizeMm,
   unpackLitholabPack,
 } from './import/litholabPack.ts'
-import { suggestedImportedOuter, validateImportedOuter } from './geom/rectFrame.ts'
+import { suggestedImportedOuter } from './geom/rectFrame.ts'
 import { FrameViewer } from './preview/viewer.ts'
 import { readParams, writeParams } from './ui/params.ts'
 import { renderProfileSketch } from './ui/profileSketch.ts'
 import { APP_LABEL, STL_HEADER } from './version.ts'
+import { BuildClient } from './worker/client.ts'
+import type { BuildResult } from './worker/protocol.ts'
 import './style.css'
 
 interface ImportState {
@@ -94,6 +103,14 @@ const previewBusy = document.querySelector<HTMLElement>('#preview-busy')
 const previewBusyLabel = document.querySelector<HTMLElement>('#preview-busy-label')
 const mouldingWidthInput = document.querySelector<HTMLInputElement>('#moulding-width')
 const mouldingHeightInput = document.querySelector<HTMLInputElement>('#moulding-height')
+const downloadKitBtn = document.querySelector<HTMLButtonElement>('#download-kit')
+const blEnabled = document.querySelector<HTMLInputElement>('#bl-enabled')
+const blPanel = document.querySelector<HTMLElement>('#bl-fields')
+const blAcrylic = document.querySelector<HTMLSelectElement>('#bl-acrylic')
+const blThickness = document.querySelector<HTMLInputElement>('#bl-acrylic-thickness')
+const blLedWidth = document.querySelector<HTMLInputElement>('#bl-led-width')
+const previewTools = document.querySelector<HTMLElement>('#preview-tools')
+const explodeInput = document.querySelector<HTMLInputElement>('#explode')
 const versionEl = document.querySelector<HTMLElement>('#app-version')
 if (versionEl) versionEl.textContent = APP_LABEL
 const versionFoot = document.querySelector<HTMLElement>('#app-version-foot')
@@ -112,11 +129,31 @@ for (const group of PROFILE_GROUPS) {
   profileSelect.appendChild(og)
 }
 
+if (blAcrylic) {
+  for (const [system, label] of [
+    ['metric', 'Metric'],
+    ['sae', 'SAE (inch)'],
+    ['custom', 'Other'],
+  ] as const) {
+    const og = document.createElement('optgroup')
+    og.label = label
+    for (const preset of ACRYLIC_PRESETS.filter((p) => p.system === system)) {
+      const opt = document.createElement('option')
+      opt.value = preset.id
+      opt.textContent =
+        preset.system === 'custom' ? preset.label : `${preset.label} — ${formatMm(preset.ledWidth)} mm LED strip`
+      og.appendChild(opt)
+    }
+    blAcrylic.appendChild(og)
+  }
+}
+
 writeParams(form, DEFAULT_PARAMS)
 
 const viewer = new FrameViewer(previewHost)
 if (previewBusy) previewHost.appendChild(previewBusy)
-let lastMesh: Mesh | null = null
+if (previewTools) previewHost.appendChild(previewTools)
+const client = new BuildClient()
 let lastParams: FrameParams | null = null
 let imported: ImportState | null = null
 let lastShape: ShapeKind | null = null
@@ -239,6 +276,7 @@ function updateReadouts(params: FrameParams): void {
   setReadout('out-glass', `${formatMm(d.glassWidth)} × ${formatMm(d.glassHeight)} mm`)
   setReadout('out-depth', `${formatMm(d.effectiveRabbetDepth)} mm`)
   setReadout('out-stack', `${formatMm(d.stackTotal)} mm`)
+  setReadout('out-total-depth', `${formatMm(d.totalRabbetDepth)} of ${formatMm(params.mouldingHeight)} mm`)
 }
 
 function setIssues(messages: string[]): void {
@@ -262,6 +300,7 @@ function clearImport(writeDefaultShape = true): void {
   if (imported?.artworkUrl) URL.revokeObjectURL(imported.artworkUrl)
   imported = null
   lastShape = null
+  client.setImport(null)
   viewer.clearArtwork()
   if (writeDefaultShape) {
     const rect = form.querySelector<HTMLInputElement>('input[name="shape"][value="rectangle"]')
@@ -275,7 +314,7 @@ function syncArtwork(params: FrameParams): void {
     viewer.clearArtwork()
     return
   }
-  const z = Math.max(0.05, deriveSizes(params).effectiveRabbetDepth - 0.05)
+  const z = Math.max(0.05, totalRabbetDepth(params) - 0.05)
   viewer.setArtwork({
     url: imported.artworkUrl,
     width: imported.silhouetteWidth,
@@ -380,13 +419,54 @@ async function runRebuild(note?: string, phase = 'Building frame…'): Promise<v
   await yieldPaint()
   if (id !== rebuildGen) return
   try {
-    rebuild(note)
+    await rebuild(note)
   } finally {
     if (id === rebuildGen) setBusy(null)
   }
 }
 
-function rebuild(fitNote?: string): void {
+/** Selecting a sheet fills its actual thickness and matching LED width; typing a thickness makes it custom. */
+function syncAcrylicPreset(changed: EventTarget | null): void {
+  if (!blAcrylic || !blThickness || !blLedWidth) return
+  if (changed === blAcrylic) {
+    const preset = acrylicPreset(blAcrylic.value as AcrylicPresetId)
+    if (preset.system !== 'custom') {
+      blThickness.value = formatMm(preset.thickness)
+      blLedWidth.value = formatMm(preset.ledWidth)
+    }
+  } else if (changed === blThickness && blAcrylic.value !== 'custom') {
+    const preset = acrylicPreset(blAcrylic.value as AcrylicPresetId)
+    if (Math.abs(blThickness.valueAsNumber - preset.thickness) > 1e-6) blAcrylic.value = 'custom'
+  }
+}
+
+/** Backlight needs a deeper, wider moulding: grow it (never shrink) like a LithoLab import does. */
+function syncBacklightFit(params: FrameParams): FrameParams {
+  const on = params.backlight.enabled
+  blPanel?.classList.toggle('is-open', on)
+  if (downloadKitBtn) downloadKitBtn.hidden = !on
+  for (const el of document.querySelectorAll<HTMLElement>('.bl-only')) el.hidden = !on
+  if (!on) return params
+  const mw = Math.ceil(Math.max(params.mouldingWidth, minMouldingWidth(params)) * 10) / 10
+  const mh = Math.ceil(Math.max(params.mouldingHeight, minMouldingHeight(params)) * 10) / 10
+  if (mw !== params.mouldingWidth && mouldingWidthInput) mouldingWidthInput.value = formatMm(mw)
+  if (mh !== params.mouldingHeight && mouldingHeightInput) mouldingHeightInput.value = formatMm(mh)
+  return { ...params, mouldingWidth: mw, mouldingHeight: mh }
+}
+
+function showBuildReadouts(result: BuildResult): void {
+  const bl = result.backlight
+  if (!bl) return
+  setReadout('out-acrylic', `${formatMm(bl.acrylicSize[0])} × ${formatMm(bl.acrylicSize[1])} mm`)
+  const m = bl.ledStripLength / 1000
+  setReadout(
+    'out-led',
+    `${formatMm(bl.ledStripLength / 10)} cm · ${Math.floor(m * 30)}/${Math.floor(m * 60)}/${Math.floor(m * 144)} LEDs @30/60/144`,
+  )
+  setReadout('out-panel', `${formatMm(bl.panelSize[0])} × ${formatMm(bl.panelSize[1])} mm`)
+}
+
+async function rebuild(fitNote?: string): Promise<void> {
   const shape = (form.querySelector<HTMLInputElement>('input[name="shape"]:checked')?.value ??
     'rectangle') as ShapeKind
   if (imported) applyImportedShapeSize(shape)
@@ -397,10 +477,8 @@ function rebuild(fitNote?: string): void {
   syncFaceSliders()
   let params = readParams(form)
   if (imported) params = syncImportedFit(params)
-  const issues = [
-    ...validateParams(params),
-    ...(imported && params.shape !== 'imported' ? validateImportedOuter(params, imported.sight) : []),
-  ]
+  params = syncBacklightFit(params)
+  const issues = validateParams(params)
   updateReadouts(params)
 
   const def = PROFILE_DEFS.find((p) => p.id === params.profile)
@@ -410,40 +488,56 @@ function rebuild(fitNote?: string): void {
   if (issues.length > 0) {
     setIssues(issues.map((i) => i.message))
     statusEl.textContent = 'Fix the highlighted sizes to rebuild the frame.'
-    downloadBtn.disabled = true
+    setDownloads(false)
     return
   }
 
-  try {
-    const mesh = buildFrame(params, imported?.sight, imported?.packOutline)
-    const report = inspectMesh(mesh)
-    viewer.setMesh(mesh, {
-      smooth:
-        params.shape === 'circle' ||
-        (!!imported && !isPolygonalOutline(imported.sight)),
-    })
-    syncArtwork(params)
-    lastMesh = mesh
-    lastParams = params
-    downloadBtn.disabled = false
-    setIssues(report.watertight ? [] : ['Mesh is not watertight — check profile parameters.'])
-    const extra = fitNote ? ` ${fitNote}` : ''
-    const summary =
-      imported
-        ? importedFrameSummary(params, imported.name)
-        : frameSummary(params)
-    statusEl.textContent = `${summary} · ${report.triangleCount} triangles${extra}`
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Could not build the frame.'
-    setIssues([message])
-    statusEl.textContent = 'Geometry error'
-    downloadBtn.disabled = true
+  statusEl.textContent = 'Updating…'
+  const result = await client.build(params)
+  if (!result) return // superseded by a newer edit
+  if (result.issues.length > 0 || !result.frame) {
+    setIssues(result.issues.length > 0 ? result.issues : ['Could not build the frame.'])
+    statusEl.textContent = 'Fix the highlighted sizes to rebuild the frame.'
+    setDownloads(false)
+    return
   }
+  viewer.setMesh(result.frame)
+  const bl = result.backlight
+  viewer.setParts(
+    bl
+      ? {
+          acrylic: bl.acrylic,
+          led: bl.led,
+          panel: bl.panel,
+          kickstand: bl.kickstand,
+          buttons: bl.buttons,
+          score: bl.score,
+          scoreZ: params.backlight.scoreFace === 'back' ? bl.bands.acrylic[1] - params.backlight.acrylicThickness - 0.02 : bl.bands.acrylic[1] + 0.02,
+          explodeSpan: Math.max(25, 0.22 * Math.max(bl.panelSize[0], bl.panelSize[1])),
+        }
+      : null,
+  )
+  if (previewTools) previewTools.hidden = !bl
+  syncArtwork(params)
+  showBuildReadouts(result)
+  lastParams = params
+  setDownloads(true)
+  const messages = [...result.warnings]
+  if (!result.watertight) messages.push('Mesh is not watertight — check profile parameters.')
+  setIssues(messages)
+  const extra = fitNote ? ` ${fitNote}` : ''
+  const summary = imported ? importedFrameSummary(params, imported.name) : frameSummary(params)
+  statusEl.textContent = `${summary} · ${result.triangleCount} triangles · ${Math.round(result.ms)} ms${extra}`
+}
+
+function setDownloads(enabled: boolean): void {
+  downloadBtn.disabled = !enabled
+  if (downloadKitBtn) downloadKitBtn.disabled = !enabled
 }
 
 function scheduleRebuild(): void {
   window.clearTimeout(timer)
-  timer = window.setTimeout(() => rebuild(), 60)
+  timer = window.setTimeout(() => void rebuild(), 60)
 }
 
 async function importPackFile(file: File): Promise<void> {
@@ -532,6 +626,7 @@ async function importPackFile(file: File): Promise<void> {
     }
 
     lastShape = 'imported'
+    client.setImport({ sight, holes, packOutline })
 
     writeParams(form, params)
     if (importStatus) importStatus.classList.remove('is-error')
@@ -540,13 +635,13 @@ async function importPackFile(file: File): Promise<void> {
     setBusy('Building frame…')
     await yieldPaint()
     if (id !== rebuildGen) return
-    rebuild(`· from ${file.name}`)
+    await rebuild(`· from ${file.name}`)
   } catch (err: unknown) {
     if (id === rebuildGen) {
       const message = err instanceof Error ? err.message : 'Could not import that pack.'
       setImportError(message)
       statusEl.textContent = 'Import failed'
-      downloadBtn.disabled = !lastMesh
+      downloadBtn.disabled = !lastParams
     }
   } finally {
     if (id === rebuildGen) setBusy(null)
@@ -554,6 +649,7 @@ async function importPackFile(file: File): Promise<void> {
 }
 
 form.addEventListener('input', (e) => {
+  syncAcrylicPreset(e.target)
   if (isMouldingField(e.target)) {
     updateProfileSketchLive()
     return
@@ -565,6 +661,10 @@ form.addEventListener('input', (e) => {
 
 form.addEventListener('change', (e) => {
   const t = e.target
+  if (t === blEnabled) {
+    void runRebuild(undefined, blEnabled?.checked ? 'Building backlit kit…' : 'Building frame…')
+    return
+  }
   if (t instanceof HTMLSelectElement && t.id === 'profile') {
     const def = PROFILE_DEFS.find((p) => p.id === t.value)
     void runRebuild(undefined, `Applying ${def?.label ?? t.value} profile…`)
@@ -594,11 +694,37 @@ for (const el of [mouldingWidthInput, mouldingHeightInput]) {
   })
 }
 
-downloadBtn.addEventListener('click', () => {
-  if (!lastMesh || !lastParams) return
-  const name = downloadName(lastParams, imported?.name)
-  downloadStl(meshToBinaryStl(lastMesh, STL_HEADER), name)
+function fileStem(): string {
+  return downloadName(lastParams ?? readParams(form), imported?.name).replace(/\.stl$/, '')
+}
+
+downloadBtn.addEventListener('click', async () => {
+  if (!lastParams) return
+  try {
+    const stl = await client.frameStl(STL_HEADER)
+    downloadBlob(new Blob([stl], { type: 'model/stl' }), `${fileStem()}.stl`)
+  } catch (err) {
+    setIssues([err instanceof Error ? err.message : 'Could not export the STL.'])
+  }
 })
+
+downloadKitBtn?.addEventListener('click', async () => {
+  if (!lastParams) return
+  const label = downloadKitBtn.textContent
+  downloadKitBtn.disabled = true
+  downloadKitBtn.textContent = 'Packaging kit…'
+  try {
+    const zip = await client.packageKit(fileStem(), STL_HEADER)
+    downloadBlob(new Blob([zip as BlobPart], { type: 'application/zip' }), `${fileStem()}-kit.zip`)
+  } catch (err) {
+    setIssues([err instanceof Error ? err.message : 'Could not package the kit.'])
+  } finally {
+    downloadKitBtn.disabled = false
+    downloadKitBtn.textContent = label
+  }
+})
+
+explodeInput?.addEventListener('input', () => viewer.setExplode(explodeInput.valueAsNumber))
 
 resetBtn?.addEventListener('click', () => {
   clearImport(false)
@@ -615,7 +741,7 @@ packInput?.addEventListener('change', () => {
     const message = err instanceof Error ? err.message : 'Could not import that pack.'
     setImportError(message)
     statusEl.textContent = 'Import failed'
-    downloadBtn.disabled = !lastMesh
+    downloadBtn.disabled = !lastParams
   })
 })
 
@@ -625,4 +751,4 @@ clearImportBtn?.addEventListener('click', () => {
 })
 
 syncImportUi()
-rebuild()
+void rebuild()

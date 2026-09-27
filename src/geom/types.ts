@@ -124,7 +124,7 @@ export interface BacklightParams {
   panelOverlap: number
   /** XY clearance between the back panel and its rabbet (mm, per side). */
   panelFit: number
-  /** Wire passthrough position: angle around the panel centre, 0 = bottom, clockwise seen from the back. */
+  /** Wire passthrough position: angle around the panel centre, 0 = bottom, 90 = right (seen from the front). */
   wireAngleDeg: number
   wireWidth: number
   /** How far the notch cuts in from the panel edge (mm). */

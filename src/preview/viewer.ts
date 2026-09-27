@@ -1,6 +1,48 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import type { Mesh as FrameMesh } from '../geom/types.ts'
+import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js'
+import type { MeshData } from '../worker/protocol.ts'
+
+export interface KitParts {
+  acrylic: MeshData
+  led: MeshData
+  panel: MeshData
+  kickstand: MeshData | null
+  buttons: MeshData | null
+  /** Score lines (x1 y1 x2 y2 …) drawn at `scoreZ`. */
+  score: Float32Array
+  scoreZ: number
+  /** Exploded spacing between layers (mm). */
+  explodeSpan: number
+}
+
+function toGeometry(mesh: MeshData, smooth: boolean): THREE.BufferGeometry {
+  let geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3))
+  if (mesh.normals) {
+    geometry.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3))
+    geometry.computeBoundingBox()
+    geometry.computeBoundingSphere()
+    return geometry
+  }
+  geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1))
+  if (smooth) {
+    // Smooth across gentle curves, keep rabbet steps and chamfers crisp.
+    geometry = toCreasedNormals(geometry, (35 * Math.PI) / 180)
+  } else {
+    geometry.computeVertexNormals()
+  }
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return geometry
+}
+
+function disposeMesh(o: THREE.Mesh | THREE.LineSegments): void {
+  o.geometry.dispose()
+  const mat = o.material
+  if (Array.isArray(mat)) mat.forEach((m) => m.dispose())
+  else mat.dispose()
+}
 
 export class FrameViewer {
   private readonly scene: THREE.Scene
@@ -16,6 +58,10 @@ export class FrameViewer {
   private readonly host: HTMLElement
   private fitted = false
   private raf = 0
+  private layers: { group: THREE.Group; step: number }[] = []
+  private explode = 0
+  private explodeSpan = 30
+  private artworkZ = 0
 
   constructor(host: HTMLElement) {
     this.host = host
@@ -53,51 +99,107 @@ export class FrameViewer {
     this.loop()
   }
 
-  setMesh(mesh: FrameMesh, opts?: { smooth?: boolean }): void {
+  setMesh(mesh: MeshData, opts?: { smooth?: boolean }): void {
     if (this.frameMesh) {
       this.root.remove(this.frameMesh)
-      this.frameMesh.geometry.dispose()
-      const mat = this.frameMesh.material
-      if (Array.isArray(mat)) mat.forEach((m) => m.dispose())
-      else mat.dispose()
+      disposeMesh(this.frameMesh)
       this.frameMesh = null
     }
-
-    const positions = new Float32Array(mesh.triangles.length * 9)
-    let i = 0
-    for (const t of mesh.triangles) {
-      positions[i++] = t.a.x
-      positions[i++] = t.a.y
-      positions[i++] = t.a.z
-      positions[i++] = t.b.x
-      positions[i++] = t.b.y
-      positions[i++] = t.b.z
-      positions[i++] = t.c.x
-      positions[i++] = t.c.y
-      positions[i++] = t.c.z
-    }
-
-    const geometry = new THREE.BufferGeometry()
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-    geometry.computeVertexNormals()
-    geometry.computeBoundingBox()
-    geometry.computeBoundingSphere()
-
+    const smooth = opts?.smooth === true || !!mesh.normals
+    const geometry = toGeometry(mesh, smooth)
     const material = new THREE.MeshStandardMaterial({
       color: 0xc4a574,
       roughness: 0.48,
       metalness: 0.04,
-      flatShading: opts?.smooth !== true,
+      flatShading: !smooth,
     })
 
     this.frameMesh = new THREE.Mesh(geometry, material)
     this.frameMesh.castShadow = true
     this.frameMesh.receiveShadow = true
     this.root.add(this.frameMesh)
+    this.applyExplode()
     if (!this.fitted) {
       this.fit(geometry)
       this.fitted = true
     }
+  }
+
+  /** Backlight kit layers (acrylic, LED band, back panel + kickstand + buttons), or null to hide. */
+  setParts(parts: KitParts | null): void {
+    this.clearParts()
+    if (!parts) return
+    const acrylic = new THREE.Group()
+    const panel = new THREE.Group()
+    const led = new THREE.Group()
+    const add = (group: THREE.Group, data: MeshData | null, material: THREE.Material, smooth = false) => {
+      if (!data) return
+      const mesh = new THREE.Mesh(toGeometry(data, smooth), material)
+      mesh.castShadow = true
+      mesh.receiveShadow = true
+      group.add(mesh)
+    }
+    add(
+      acrylic,
+      parts.acrylic,
+      new THREE.MeshStandardMaterial({
+        color: 0xcfeeff,
+        roughness: 0.08,
+        metalness: 0,
+        transparent: true,
+        opacity: 0.32,
+        depthWrite: false,
+      }),
+    )
+    if (parts.score.length > 0) {
+      const n = parts.score.length / 4
+      const pos = new Float32Array(n * 6)
+      for (let i = 0; i < n; i++) {
+        pos.set(
+          [parts.score[i * 4]!, parts.score[i * 4 + 1]!, parts.scoreZ, parts.score[i * 4 + 2]!, parts.score[i * 4 + 3]!, parts.scoreZ],
+          i * 6,
+        )
+      }
+      const g = new THREE.BufferGeometry()
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+      acrylic.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xeaf6ff, transparent: true, opacity: 0.55 })))
+    }
+    add(led, parts.led, new THREE.MeshStandardMaterial({ color: 0xfff1d6, emissive: 0xffc46b, emissiveIntensity: 0.9 }))
+    add(panel, parts.panel, new THREE.MeshStandardMaterial({ color: 0xf1f1ee, roughness: 0.7, flatShading: true }))
+    add(panel, parts.kickstand, new THREE.MeshStandardMaterial({ color: 0x9aa3ad, roughness: 0.6, flatShading: true }))
+    add(panel, parts.buttons, new THREE.MeshStandardMaterial({ color: 0x8b939c, roughness: 0.6, flatShading: true }))
+    // Exploding lifts the frame (with its LED strip and the lithophane) and the acrylic off the panel.
+    this.layers = [
+      { group: acrylic, step: 1 },
+      { group: led, step: 2 },
+      { group: panel, step: 0 },
+    ]
+    for (const l of this.layers) this.root.add(l.group)
+    this.explodeSpan = parts.explodeSpan
+    this.applyExplode()
+  }
+
+  /** 0 = assembled, 1 = fully exploded toward the back. */
+  setExplode(amount: number): void {
+    this.explode = Math.max(0, Math.min(1, amount))
+    this.applyExplode()
+  }
+
+  private applyExplode(): void {
+    const e = this.layers.length > 0 ? this.explode * this.explodeSpan : 0
+    for (const l of this.layers) l.group.position.z = l.step * e
+    if (this.frameMesh) this.frameMesh.position.z = 2 * e
+    if (this.artworkMesh) this.artworkMesh.position.z = this.artworkZ + 2 * e
+  }
+
+  private clearParts(): void {
+    for (const l of this.layers) {
+      this.root.remove(l.group)
+      l.group.traverse((o) => {
+        if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) disposeMesh(o)
+      })
+    }
+    this.layers = []
   }
 
   setArtwork(
@@ -134,7 +236,9 @@ export class FrameViewer {
         })
         this.artworkTexture = texture
         this.artworkMesh = new THREE.Mesh(geometry, material)
+        this.artworkZ = artwork.z
         this.artworkMesh.position.z = artwork.z
+        this.applyExplode()
         this.artworkMesh.renderOrder = 1
         this.root.add(this.artworkMesh)
       },

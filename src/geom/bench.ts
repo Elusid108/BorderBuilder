@@ -7,6 +7,9 @@ import { ensureCcw } from './plan.ts'
 import { suggestedImportedOuter } from './rectFrame.ts'
 import { DEFAULT_PARAMS, type FrameParams, type PlanVertex, type ProfileId } from './types.ts'
 import { packOutlineFromPlan } from '../import/litholabPack.ts'
+import { loadManifold } from './manifold.ts'
+
+await loadManifold()
 
 function heartPoly(scale = 3.4, n = 200): PlanVertex[] {
   const pts: PlanVertex[] = []

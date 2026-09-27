@@ -109,6 +109,26 @@
               Lip is the flat landing on the glass (separate from the back rabbet). Face depth is how
               strongly the moulding reads — 0 is almost flat, 1 is full character.
             </p>
+            <h3 class="sub">Chamfers (mm)</h3>
+            <div class="row row-3">
+              <label class="field">
+                <span>Sight edge</span>
+                <input id="chamfer-sight" type="number" min="0" max="3" step="0.1" />
+              </label>
+              <label class="field">
+                <span>Back edge</span>
+                <input id="chamfer-back" type="number" min="0" max="3" step="0.1" />
+              </label>
+              <label class="field">
+                <span>Rabbet mouth</span>
+                <input id="chamfer-mouth" type="number" min="0" max="3" step="0.1" />
+              </label>
+            </div>
+            <p class="hint">
+              Small bevels on the front opening, the back outer edge, and the back rabbet mouth. They
+              soften sharp edges and absorb elephant's foot so parts still drop into the rabbet. Set 0
+              for square edges.
+            </p>
           </section>
 
           <section class="section">
@@ -165,6 +185,124 @@
             </p>
           </section>
 
+          <section class="section">
+            <h2>Backlight</h2>
+            <label class="check">
+              <input id="bl-enabled" type="checkbox" />
+              <span>Edge-lit acrylic, LED strip, and back panel</span>
+            </label>
+            <p class="hint">
+              Adds two rabbets behind the lithophane: one for a laser-scored acrylic light guide with an
+              LED strip around its edge, and one for a printed back panel with a wire notch, turn-buttons,
+              and a plug-in kickstand. Download the kit for every STL, a 3MF, and the acrylic DXF.
+            </p>
+            <div id="bl-fields" class="stack-fields">
+              <h3 class="sub">Acrylic light guide</h3>
+              <label class="field">
+                <span>Sheet (matched to LED strip width)</span>
+                <select id="bl-acrylic"></select>
+              </label>
+              <div class="row">
+                <label class="field">
+                  <span>Actual thickness (mm)</span>
+                  <input id="bl-acrylic-thickness" type="number" min="1" step="0.05" />
+                </label>
+                <label class="field">
+                  <span>LED strip width (mm)</span>
+                  <input id="bl-led-width" type="number" min="1" step="0.5" />
+                </label>
+              </div>
+              <div class="row">
+                <label class="field">
+                  <span>LED gap (mm)</span>
+                  <input id="bl-led-gap" type="number" min="0.5" step="0.1" />
+                </label>
+                <label class="field">
+                  <span>Score pitch (mm)</span>
+                  <input id="bl-score-pitch" type="number" min="0.5" step="0.1" />
+                </label>
+              </div>
+              <label class="field">
+                <span>Scored face</span>
+                <select id="bl-score-face">
+                  <option value="back">Back, toward the panel (DXF mirrored)</option>
+                  <option value="front">Front, toward the lithophane</option>
+                </select>
+              </label>
+              <p class="hint">
+                The acrylic is cut to the lithophane outline. The score grid covers the image area; the
+                clear margin matches the lithophane border. The LED gap is the room between the acrylic
+                edge and the wall, where the strip sits (default 3 mm).
+              </p>
+
+              <h3 class="sub">Back panel</h3>
+              <div class="row">
+                <label class="field">
+                  <span>Thickness (mm)</span>
+                  <input id="bl-panel-thickness" type="number" min="1" step="0.1" />
+                </label>
+                <label class="field">
+                  <span>Overlap past LEDs (mm)</span>
+                  <input id="bl-panel-overlap" type="number" min="1" step="0.1" />
+                </label>
+              </div>
+              <div class="row">
+                <label class="field">
+                  <span>Fit clearance (mm)</span>
+                  <input id="bl-panel-fit" type="number" min="0" step="0.05" />
+                </label>
+                <label class="field">
+                  <span>Turn-buttons</span>
+                  <input id="bl-buttons" type="number" min="0" max="12" step="1" />
+                </label>
+              </div>
+              <label class="field">
+                <span>Turn-button screws</span>
+                <select id="bl-screw">
+                  <option value="M3">M3 self-tapping (2.5 mm pilot)</option>
+                  <option value="M2.5">M2.5 self-tapping (2.05 mm pilot)</option>
+                </select>
+              </label>
+
+              <h3 class="sub">LED wire passthrough</h3>
+              <div class="row row-3">
+                <label class="field">
+                  <span>Position (°)</span>
+                  <input id="bl-wire-angle" type="number" min="-360" max="360" step="5" />
+                </label>
+                <label class="field">
+                  <span>Width (mm)</span>
+                  <input id="bl-wire-width" type="number" min="1" step="0.5" />
+                </label>
+                <label class="field">
+                  <span>Depth (mm)</span>
+                  <input id="bl-wire-depth" type="number" min="1" step="0.5" />
+                </label>
+              </div>
+              <p class="hint">Notch in the back panel edge. 0° is the bottom, 90° the right side (seen from the front).</p>
+
+              <h3 class="sub">Kickstand</h3>
+              <label class="check">
+                <input id="bl-kickstand" type="checkbox" />
+                <span>Plug-in kickstand (prints flat, pulls out to hang)</span>
+              </label>
+              <div class="row row-3">
+                <label class="field">
+                  <span>Lean (°)</span>
+                  <input id="bl-kick-tilt" type="number" min="5" max="35" step="1" />
+                </label>
+                <label class="field">
+                  <span>Width (mm)</span>
+                  <input id="bl-kick-width" type="number" min="6" step="0.5" />
+                </label>
+                <label class="field">
+                  <span>Thickness (mm)</span>
+                  <input id="bl-kick-thickness" type="number" min="2.5" step="0.5" />
+                </label>
+              </div>
+            </div>
+          </section>
+
           <section class="section derived">
             <h2>Derived sizes</h2>
             <dl>
@@ -188,6 +326,22 @@
                 <dt>Stack total</dt>
                 <dd id="out-stack">—</dd>
               </div>
+              <div class="bl-only" hidden>
+                <dt>Total back depth</dt>
+                <dd id="out-total-depth">—</dd>
+              </div>
+              <div class="bl-only" hidden>
+                <dt>Acrylic cut</dt>
+                <dd id="out-acrylic">—</dd>
+              </div>
+              <div class="bl-only" hidden>
+                <dt>LED strip</dt>
+                <dd id="out-led">—</dd>
+              </div>
+              <div class="bl-only" hidden>
+                <dt>Back panel</dt>
+                <dd id="out-panel">—</dd>
+              </div>
             </dl>
           </section>
 
@@ -196,6 +350,7 @@
           <div class="actions">
             <button id="download" type="button" class="primary">Download STL</button>
             <button id="reset" type="button" class="ghost">Reset defaults</button>
+            <button id="download-kit" type="button" class="primary kit" hidden>Download kit (.zip)</button>
           </div>
         </form>
 
@@ -208,6 +363,12 @@
 
       <main class="stage">
         <div id="preview" class="preview" aria-label="3D frame preview" aria-busy="false">
+          <div id="preview-tools" class="preview-tools" hidden>
+            <label>
+              <span>Explode</span>
+              <input id="explode" type="range" min="0" max="1" step="0.01" value="0" />
+            </label>
+          </div>
           <div id="preview-busy" class="preview-busy" hidden>
             <div class="preview-busy-spinner" aria-hidden="true"></div>
             <p id="preview-busy-label" aria-live="polite">Building…</p>

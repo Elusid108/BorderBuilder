@@ -1,4 +1,12 @@
 import JSZip from 'jszip'
+import { acrylicDxf, parseAcrylicDxf } from '../export/dxf.ts'
+import { buildKitPackage, panelForPrint } from '../export/kitPackage.ts'
+import { buildThreeMf } from '../export/threemf.ts'
+import { rabbetSteps } from './derived.ts'
+import { indexedVolume, inspectIndexed } from './indexed.ts'
+import { loadManifold } from './manifold.ts'
+import { buildKit, drillPilotHoles } from './parts/kit.ts'
+import { wallRing } from './rings.ts'
 import { deriveSizes } from './derived.ts'
 import { buildFrame } from './frame.ts'
 import { centerFlipY, extractMaskPolygons, maskInsideFromImage, NEAR_BLACK_LUM, sightFromMaskImage } from './maskTrace.ts'
@@ -11,7 +19,10 @@ import { buildRectFrame, presetOuterLoop, suggestedImportedOuter } from './rectF
 import { meshToBinaryStl } from './stl.ts'
 import { DEFAULT_PARAMS as SHIPPED_DEFAULTS, NO_CHAMFER, PROFILE_DEFS, type FrameParams, type Mesh, type PlanVertex, type ProfileId } from './types.ts'
 import { inspectMesh } from './validate.ts'
-import { mapPackToFrameParams, PACK_XY_FIT_MM, packOutlineFromPlan, pocketRingFromPack, unpackLitholabPack, type ProjectJsonV1 } from '../import/litholabPack.ts'
+import { mapPackToFrameParams, PACK_XY_FIT_MM, packOutlineFromPlan, packRing, pocketRingFromPack, unpackLitholabPack, type ProjectJsonV1 } from '../import/litholabPack.ts'
+
+// The app's worker loads the kernel before building; match it so pack rings take the same path.
+await loadManifold()
 
 /** Legacy checks run on the v0.6.1 section (no chamfers); chamfer / backlight checks opt in. */
 const DEFAULT_PARAMS: FrameParams = { ...SHIPPED_DEFAULTS, chamfer: NO_CHAMFER }
@@ -922,5 +933,181 @@ console.log(`ok  waterdrop-organic: ${dropSight.length} verts, mask ${maskDrop.s
 checkLetterAMask()
 
 await checkPackRoundtrip()
+
+// ---- v0.7: chamfers, stepped backlight rabbets, kit parts, exports ----
+
+function checkChamfers(): void {
+  const withChamfer: FrameParams = { ...SHIPPED_DEFAULTS }
+  for (const profile of ['flat', 'ogee', 'bullnose'] as ProfileId[]) {
+    const params = { ...withChamfer, profile }
+    const report = inspectMesh(buildRectFrame(params))
+    assert(report.watertight, `chamfer ${profile}: not watertight open=${report.openEdges} nm=${report.nonManifoldEdges}`)
+    const prof = buildProfile(params)
+    assert(prof.some((p) => nearly(p.u, params.chamfer.sight) && nearly(p.v, params.mouldingHeight)), `chamfer ${profile}: missing sight chamfer`)
+    assert(prof.some((p) => nearly(p.u, params.mouldingWidth) && nearly(p.v, params.chamfer.backOuter)), `chamfer ${profile}: missing back chamfer`)
+  }
+  const heart = buildFrame({ ...heartParams, chamfer: SHIPPED_DEFAULTS.chamfer, rabbetWidth: 3.8 }, heartSight, packOutlineFromPlan(heartSight, 3))
+  const hr = inspectMesh(heart)
+  assert(hr.watertight, `chamfer heart: not watertight open=${hr.openEdges} nm=${hr.nonManifoldEdges}`)
+  console.log('ok  chamfers: rect flat/ogee/bullnose + heart pack watertight')
+}
+
+const BACKLIGHT = { ...SHIPPED_DEFAULTS.backlight, enabled: true }
+
+/** Pack-imported frame with backlight: walls at pack + fit, pack + gap, pack + gap + overlap. */
+function checkBacklightWalls(sight: PlanVertex[], shape: FrameParams['shape'], label: string): void {
+  const pack = packOutlineFromPlan(sight, 3)
+  const outer = shape === 'imported' ? { sightWidth: 96, sightHeight: 96 } : suggestedImportedOuter(sight, 20, shape)
+  const params: FrameParams = {
+    ...SHIPPED_DEFAULTS,
+    shape,
+    ...outer,
+    mouldingWidth: 20,
+    mouldingHeight: 16,
+    rabbetWidth: 3.8,
+    rabbetDepth: 4,
+    fitClearance: 0.8,
+    packBorder: 3,
+    backlight: BACKLIGHT,
+  }
+  const mesh = buildFrame(params, sight, pack)
+  const report = inspectMesh(mesh)
+  assert(report.watertight, `${label}: not watertight open=${report.openEdges} nm=${report.nonManifoldEdges}`)
+  const steps = rabbetSteps(params)
+  let v = 0
+  const back = [...steps].reverse()
+  for (const st of back) {
+    const ring = packRing(pack, st.u - 3)
+    // Top of each wall (the back-most wall's foot carries the mouth chamfer).
+    const zs = st === back[0] ? [v + st.depth] : [v, v + st.depth]
+    let n = 0
+    let worst = 0
+    for (const t of mesh.triangles) {
+      for (const p of [t.a, t.b, t.c]) {
+        if (!zs.some((z) => Math.abs(p.z - z) < 1e-6)) continue
+        const d = minEdgeDistance(p, ring)
+        if (d > 0.5) continue
+        n++
+        worst = Math.max(worst, d)
+      }
+    }
+    assert(n > 100, `${label}: ${st.id} wall has too few vertices (${n})`)
+    assert(worst < 0.1, `${label}: ${st.id} wall strays ${worst.toFixed(3)} mm from pack + ${(st.u - 3).toFixed(1)} mm`)
+    v += st.depth
+  }
+  console.log(`ok  ${label}: ${report.triangleCount} tris, 3 rabbet walls on the pack parallels`)
+}
+
+async function checkKit(): Promise<void> {
+  const rect: FrameParams = { ...SHIPPED_DEFAULTS, mouldingWidth: 22, mouldingHeight: 16, backlight: BACKLIGHT }
+  for (const shape of ['rectangle', 'hexagon', 'circle'] as FrameParams['shape'][]) {
+    const params = { ...rect, shape, sightWidth: shape === 'rectangle' ? 100 : 50 }
+    const report = inspectMesh(buildFrame(params))
+    assert(report.watertight, `backlight ${shape}: not watertight`)
+  }
+
+  const kit = await buildKit({ params: rect })
+  const bl = kit.backlight
+  if (!bl) throw new Error('kit: backlight parts missing')
+  for (const [name, m] of [
+    ['frame', kit.frame],
+    ['panel', bl.panel],
+    ['kickstand', bl.kickstand],
+    ['button', bl.button],
+    ['acrylic', bl.preview.acrylic],
+  ] as const) {
+    if (!m) throw new Error(`kit: ${name} missing`)
+    const r = inspectIndexed(m)
+    assert(r.watertight && indexedVolume(m) > 0, `kit ${name}: not a closed positive solid`)
+  }
+  // Panel sits inside the back rabbet by the panel fit.
+  const r3 = rabbetSteps(rect)[2]!.u
+  const wall = wallRing({ params: rect }, r3)
+  const pos = bl.panel.positions
+  let inside = true
+  for (let i = 0; i < pos.length; i += 3) {
+    if (pos[i + 2]! < -1e-6) continue
+    const p = { x: pos[i]!, y: pos[i + 1]! }
+    if (!pointInPoly(p, wall) || minEdgeDistance(p, wall) < rect.backlight.panelFit - 1e-3) inside = false
+  }
+  assert(inside, 'kit: back panel pokes into its rabbet clearance')
+  // The wire notch (bottom, 0°) is open at mid-depth and closed just past its floor on the front face.
+  const wb = loopBounds(wall)
+  const notchFloor = wb.minY + rect.backlight.panelFit + rect.backlight.wireDepth
+  const onFace = (x: number, y: number): boolean => {
+    const ix = bl.panel.indices
+    for (let t = 0; t < ix.length; t += 3) {
+      const [a, b, c] = [ix[t]! * 3, ix[t + 1]! * 3, ix[t + 2]! * 3]
+      const z = rect.backlight.panelThickness
+      if (![a, b, c].every((k) => Math.abs(pos[k + 2]! - z) < 1e-4)) continue
+      const tri = [a, b, c].map((k) => ({ x: pos[k]!, y: pos[k + 1]! }))
+      if (pointInPoly({ x, y }, tri)) return true
+    }
+    return false
+  }
+  const minY = notchFloor
+  assert(!onFace(0, notchFloor - rect.backlight.wireDepth / 2), 'kit: wire notch missing')
+  assert(onFace(0, notchFloor + 1), 'kit: panel missing past the wire notch')
+  // Acrylic = glass size; bands stack to the total depth.
+  const ab = loopBounds(bl.acrylicOutline)
+  const glass = deriveSizes(rect)
+  assert(nearly(ab.maxX - ab.minX, glass.glassWidth, 0.01), `kit: acrylic width ${ab.maxX - ab.minX} != glass ${glass.glassWidth}`)
+  assert(!!bl.kickstandLayout && bl.kickstandLayout.legReach > 40, 'kit: kickstand reach looks wrong')
+  assert(bl.buttonPivots.length === rect.backlight.buttonCount, 'kit: turn-button count')
+
+  const drilled = await drillPilotHoles(kit)
+  const dr = inspectIndexed(drilled)
+  const removed = indexedVolume(kit.frame) - indexedVolume(drilled)
+  const h = bl.pilotHoles[0]!
+  const expect = bl.pilotHoles.length * Math.PI * (h.diameter / 2) ** 2 * h.depth
+  assert(dr.watertight, 'kit: drilled frame not watertight')
+  assert(Math.abs(removed - expect) < expect * 0.1, `kit: pilot holes removed ${removed.toFixed(1)} mm³, want ~${expect.toFixed(1)}`)
+
+  const printed = panelForPrint(bl.panel, rect.backlight.panelThickness)
+  const pr = inspectIndexed(printed)
+  assert(pr.watertight && nearly(pr.bounds.min.z, 0, 1e-3) && indexedVolume(printed) > 0, 'kit: print-oriented panel')
+
+  // DXF: one closed cut loop matching the (mirrored) acrylic outline, score lines inside the sight.
+  const dxf = parseAcrylicDxf(acrylicDxf({ outline: bl.acrylicOutline, score: bl.scoreSegments, mirror: true }))
+  assert(dxf.cut.length === 1 && dxf.cut[0]!.length === bl.acrylicOutline.length, 'dxf: cut loop')
+  assert(dxf.lines.length === bl.scoreSegments.length && dxf.lines.length > 50, `dxf: ${dxf.lines.length} score lines`)
+  const cb = loopBounds(dxf.cut[0]!)
+  assert(nearly(cb.minX, 0, 1e-3) && nearly(cb.maxX - cb.minX, ab.maxX - ab.minX, 1e-3), 'dxf: cut bbox')
+  const mirroredSight = bl.scoreRegion.map((p) => ({ x: -p.x - (-ab.maxX), y: p.y - ab.minY }))
+  for (const l of dxf.lines) {
+    for (const p of [l.a, l.b]) assert(minEdgeDistance(p, mirroredSight) < 1e-3 || pointInPoly(p, mirroredSight), 'dxf: score outside the sight')
+  }
+  const ys = [...new Set(dxf.lines.filter((l) => nearly(l.a.y, l.b.y)).map((l) => Math.round(l.a.y * 1000) / 1000))].sort((a, b) => a - b)
+  assert(nearly(ys[1]! - ys[0]!, rect.backlight.scorePitch, 1e-3), 'dxf: score pitch')
+
+  const threeMf = await JSZip.loadAsync(await buildThreeMf([{ name: 'a', mesh: bl.panel }, { name: 'b', mesh: bl.button!, copies: 4 }]))
+  const model = await threeMf.file('3D/3dmodel.model')!.async('string')
+  assert((model.match(/<object /g) ?? []).length === 2 && (model.match(/<item /g) ?? []).length === 5, '3mf: objects / items')
+
+  const pkg = await JSZip.loadAsync(await buildKitPackage({ kit, params: rect, baseName: 'kit', header: 'selfcheck' }))
+  const names = Object.keys(pkg.files).sort()
+  for (const f of ['kit-frame.stl', 'kit-back-panel.stl', 'kit-kickstand.stl', 'kit-turn-button.stl', 'kit-parts.3mf', 'kit-acrylic.dxf', 'kit-cut-sheet.txt', 'kit-settings.json']) {
+    assert(names.includes(f), `package: missing ${f}`)
+  }
+  console.log(
+    `ok  kit: panel/kickstand/buttons watertight, notch at ${minY.toFixed(1)} mm, ${bl.pilotHoles.length} pilot holes, DXF ${dxf.lines.length} lines, package ${names.length} files`,
+  )
+
+  const heartKit = await buildKit({
+    params: { ...heartParams, chamfer: SHIPPED_DEFAULTS.chamfer, rabbetWidth: 3.8, mouldingHeight: 16, packBorder: 3, backlight: BACKLIGHT },
+    sight: heartSight,
+    packOutline: packOutlineFromPlan(heartSight, 3),
+  })
+  const hb = heartKit.backlight!
+  for (const m of [heartKit.frame, hb.panel, hb.kickstand!]) assert(inspectIndexed(m).watertight, 'heart kit: part not watertight')
+  assert(heartKit.warnings.length === 0, `heart kit warnings: ${heartKit.warnings.join(' ')}`)
+  console.log(`ok  heart-kit: ${hb.scoreSegments.length} score lines, LED strip ${(hb.ledStripLength / 10).toFixed(1)} cm`)
+}
+
+checkChamfers()
+checkBacklightWalls(heartSight, 'imported', 'heart-backlight')
+checkBacklightWalls(gearPoly(), 'imported', 'gear-backlight')
+checkBacklightWalls(heartSight, 'rectangle', 'heart-backlight-rect-outer')
+await checkKit()
 
 console.log('geometry self-check passed')

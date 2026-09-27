@@ -1,8 +1,8 @@
 # BorderBuilder
 
-Client-side STL generator for picture frames and lithophane borders. You set a **sight size** and **moulding profile**, or import a **LithoLab pack**; the app builds a single watertight solid and downloads a millimetre-unit STL for 3D printing.
+Client-side STL generator for picture frames and lithophane borders. You set a **sight size** and **moulding profile**, or import a **LithoLab pack**; the app builds a single watertight solid and downloads a millimetre-unit STL for 3D printing. With **Backlight** on it builds a whole edge-lit kit: frame, laser-scored acrylic light guide (DXF), printed back panel, kickstand, and turn-buttons.
 
-**v0.6.1** — Hexagon / Octagon / Rectangle / Circle outers around an imported lithophane no longer warp to the inner teeth; moulding Width / Height commit on blur or Enter; import, shape, and profile changes show a live busy phase until the mesh is ready. **v0.6.0** — Back rabbet is a sharp parallel of the LithoLab pack plus Fit (default 0.8 mm). After import, Rectangle / Hexagon / Octagon / Circle set a user-sized outer while the lithophane hole and rabbet stay. v0.5.1 pinned the front to the unsmoothed plate. v0.5.0 followed the pack on the back but lofted a smoothed sight on the front. Square is gone; Hexagon, Octagon, and Circle size by circumradius. v0.4.2 tried to follow a smoothed sight offset and still sat on the inner magenta. v0.4.1 — Letter-A and other notched organic frames: the moulding follows the traced outline (including the gap between an A’s legs) instead of a convex hull or a straight bar across the bottom; the preview shows the masked letter, not the unclipped photo; offset-loft rings stay corresponded to the sight so the legs no longer fold through the opening. v0.4.0 classified stencil holes and kept gray mask fill inside the silhouette. The original “Phase 1 rectangles only” plan has been overtaken by LithoLab import and mixed plan shapes. This README describes what actually ships, then a tentative backlog.
+**v0.7.0** — **Backlit kit:** two more rabbets behind the lithophane — an acrylic + LED band (sheet presets matched to 4 / 6 / 8 / 10 / 12 mm LED strips, metric and SAE) and a back-panel step. Download the kit ZIP: frame, back panel, kickstand, and turn-button STLs, a 3MF with every printed part laid out, the acrylic DXF (cut + 2 mm score grid), a cut sheet, and the settings. **Chamfers** on the sight edge, back outer edge, and rabbet mouth. **Rebuilds run in a Web Worker** and are 8–38× faster (a heart import dropped from 3.2 s to 0.24 s; an ogee from 8 s to 0.9 s), so the UI never freezes. Smooth previews use creased normals, so rabbet steps and chamfers stay crisp. **v0.6.1** — Hexagon / Octagon / Rectangle / Circle outers around an imported lithophane no longer warp to the inner teeth; moulding Width / Height commit on blur or Enter; import, shape, and profile changes show a live busy phase until the mesh is ready. **v0.6.0** — Back rabbet is a sharp parallel of the LithoLab pack plus Fit (default 0.8 mm). After import, Rectangle / Hexagon / Octagon / Circle set a user-sized outer while the lithophane hole and rabbet stay. v0.5.1 pinned the front to the unsmoothed plate. v0.5.0 followed the pack on the back but lofted a smoothed sight on the front. Square is gone; Hexagon, Octagon, and Circle size by circumradius. v0.4.2 tried to follow a smoothed sight offset and still sat on the inner magenta. v0.4.1 — Letter-A and other notched organic frames: the moulding follows the traced outline (including the gap between an A’s legs) instead of a convex hull or a straight bar across the bottom; the preview shows the masked letter, not the unclipped photo; offset-loft rings stay corresponded to the sight so the legs no longer fold through the opening. v0.4.0 classified stencil holes and kept gray mask fill inside the silhouette. The original “Phase 1 rectangles only” plan has been overtaken by LithoLab import and mixed plan shapes. This README describes what actually ships, then a tentative backlog.
 
 Runs entirely in the browser. No backend. Intended host: **GitHub Pages**. The header pill, footer, page title, and STL file header all read the version from `package.json`.
 
@@ -20,8 +20,31 @@ Runs entirely in the browser. No backend. Intended host: **GitHub Pages**. The h
 - **Fit clearance:** rectangles shrink the glass-size readout so glass is not press-fit. LithoLab import is the lithophane-to-rabbet gap around the pack; drag it to grow or shrink the back wall live (floor 0.8 mm).
 - **Derived readouts:** outer size, rabbet pocket, glass size, effective rabbet depth, stack total.
 - **Preview:** orbitable Three.js view. Moulding width/height apply on blur or Enter (the profile sketch still updates while you type). Import, shape, and profile changes show a busy overlay with a live phase until the mesh is ready. Faceted shading on polygonal imports; smoother shading on organic ones.
-- **Export:** binary STL, one watertight solid, millimetres, header `BorderBuilder v0.6.1`.
+- **Chamfers:** sight edge (0.4 mm), back outer edge (0.4 mm), and the mouth of the back-most rabbet (0.3 mm). They soften sharp edges and absorb elephant's foot so parts still drop into the rabbet. Each is clamped to what the section can hold; set 0 for square edges.
+- **Backlight (edge-lit acrylic):** see [Backlit kit](#backlit-kit).
+- **Export:** binary STL, one watertight solid, millimetres, header `BorderBuilder v0.7.0`. With backlight on, **Download kit (.zip)** adds every part (below).
 - **Defaults:** 100 × 150 mm artwork, 20 mm moulding, 15 mm thick, 6 mm rabbet width, 5 mm rabbet depth, 0.8 mm fit clearance.
+
+## Backlit kit
+
+Tick **Backlight** to stack an edge-lit light guide and a printed back behind the lithophane. The section becomes a rabbet staircase (front to back):
+
+| Step | Depth | Wall |
+|---|---|---|
+| Lithophane | rabbet depth (LithoLab: stack height + 0.4 mm) | pack + fit (unchanged) |
+| Acrylic + LED band | max(acrylic, LED strip width) + 0.3 mm | lithophane edge + **LED gap** (default 3 mm) |
+| Back panel | panel thickness (default 3 mm), flush with the frame back | LED wall + **overlap** (default 4 mm) |
+
+On LithoLab imports every wall is a parallel of the pack outline, so an organic silhouette gets organic rabbets. Moulding width and height grow automatically to fit the stack (never shrink).
+
+- **Acrylic:** cut to the lithophane outline (the pack outline, or the glass size on presets). Sheet presets pair standard cast sheets with LED strips: metric 4 / 6 / 8 / 10 / 12 mm and SAE 3/16″, 1/4″, 5/16″, 3/8″, 1/2″ (→ 4 / 6 / 8 / 10 / 12 mm strips). Enter your measured thickness — cast sheet varies about ±10%.
+- **Score grid:** hairlines at the score pitch (default 2 mm) in X and Y, centred and clipped to the image area (the mask). The clear margin therefore equals the lithophane border, and letter counters stay unscored. The DXF (R12, mm) has a red `CUT` polyline and blue `SCORE` lines that serpentine. By default the score faces the back panel and the DXF is mirrored; pick "Front" to score the side facing the lithophane.
+- **LED strip:** sits on the acrylic-band wall. The derived readout gives the strip length and LED counts at 30 / 60 / 144 per metre.
+- **Back panel:** the back rabbet outline minus panel fit (0.3 mm). A wire notch (position in degrees, 0 = bottom, 90 = right as seen from the front; width; depth) cuts in from the edge far enough to reach the LED gap. Print it white, face-down — it is the reflector.
+- **Turn-buttons:** 0–12 printed swivel clips, spaced evenly around the back face, starting half a pitch from the wire notch. The exported frame has matching pilot holes (M3 → 2.5 mm, M2.5 → 2.05 mm; up to 7 mm deep, limited by the face above).
+- **Kickstand:** a plug-in leg that prints on its side without supports and pulls out to hang the frame. The socket boss on the panel is angled so the frame leans back by the chosen tilt (default 15°) with the leg at 35° from vertical, and the foot is cut level with the table.
+- **Kit ZIP:** `frame.stl` (pilot holes cut), `back-panel.stl`, `kickstand.stl`, `turn-button.stl`, `parts.3mf` (all printed parts, buttons ×N), `acrylic.dxf`, `cut-sheet.txt` (sizes, LED length, screws, print orientation, assembly), `settings.json`.
+- **Preview:** acrylic (translucent, with score lines), the LED band, the back panel, the kickstand, and the buttons. The **Explode** slider lifts the frame and the acrylic off the panel.
 
 Validation rejects non-positive sizes, rabbet width ≥ moulding width, and rabbet depth ≥ moulding height.
 
@@ -39,7 +62,8 @@ Then open the URL Vite prints (typically `http://localhost:5173/BorderBuilder/`)
 ```bash
 npm run build    # tsc && vite build
 npm run preview  # serve the production bundle
-npm run check:geom  # watertight / bbox / STL header / import self-check
+npm run check:geom  # watertight / bbox / STL header / import / kit / DXF / 3MF self-check
+npm run bench:geom  # build timings (append `-- backlight` for backlit cases)
 ```
 
 Bump the UI / STL version by changing `"version"` in `package.json` only.
@@ -69,9 +93,12 @@ Every frame is three layers of description. The first two are implemented for re
 
 - **Rectangles, hexagons, octagons, and sharp imported polygons** use **true miters** in `src/geom/miterSweep.ts`. Each profile vertex is placed at the intersection of two offset edges. Adjacent sides share those vertices, so the mesh is one manifold solid. Circles use the organic offset loft (~96 vertices).
 - **Organic imported paths** (heart, waterdrop, letter, freeform) use `src/geom/offsetLoft.ts`: a distance-transform offset of the sight at each profile `u`, then a loft between those rings. The outer ring is corresponded with `mergeWalk` so convex tip caps stay round. When a LithoLab pack is imported, the **rabbet wall** (`u = rabbetWidth`) is forced to the pack outline plus Fit clearance instead of `offset(smoothed sight, border+fit)`. Rings stay corresponded to the sight so a deep notch that the outer offset fills does not fold the moulding through the opening. Concave clefts fill on the outer moulding instead of colliding; large-radius curves do not collapse to a few mitered chords.
+- **Rabbet staircase:** `rabbetSteps` (`src/geom/derived.ts`) lists each rabbet's wall `u` and depth; the profile emits them back-most first. On organic imports each wall `u` is a *forced ring* of the loft (`sweepOffsetLoft` `forcedRings`), pinned to a pack parallel (`packRing`, memoised; miter joins, Clipper2 when a concave corner makes the miter self-intersect). Only the outermost forced ring re-densifies the front ring; the rest map onto it.
+- **Kit parts** (`src/geom/parts/`) are built with [manifold-3d](https://github.com/elalish/manifold) (WASM): extrusions of the back rabbet ring, notch and socket booleans, and the export-time pilot-hole CSG on the welded frame.
+- **Speed:** nearest-edge queries use a uniform grid (`src/geom/segIndex.ts`) instead of O(n·m) scans. Disk offsets compute one distance field and extract each iso level with block-skipping marching squares. Welding uses a typed-array hash. All of it runs in `src/worker/build.worker.ts`; the main thread only sends params and draws.
 - Classification lives in `asPolygonCorners` (`src/geom/plan.ts`): after a 0.6 mm simplify, a convex loop with 3–12 vertices whose **every** remaining turn is at least 35° is treated as a polygon. Teardrops and other shallow sweeps stay organic.
 
-Print orientation: `z = 0` is the **back** (rabbet on the bed if you print as-exported). Flip in the slicer if you want the face on the bed.
+Print orientation: `z = 0` is the **back** (rabbet on the bed if you print as-exported). Flip in the slicer if you want the face on the bed — with a flat face that is the better choice for a backlit frame, because the rabbet steps then build up without overhangs.
 
 ## Tentative plan
 
@@ -79,8 +106,10 @@ Shipped work is the new baseline. What follows is a **tentative** backlog: keep 
 
 ### Next (prove it prints)
 
-1. **Print a LithoLab pack** (heart, triangle, waterdrop) at 0.8 mm XY fit and 0.4 mm depth slack. If it is tight or sloppy, tweak **Fit clearance** — not more UI.
-2. **Back retainer** so a lithophane cannot fall out of the rabbet (clips, a thin back lip, or a snap ring). Highest-value feature once frames actually fit.
+1. **Print a backlit kit** (heart, letter, rectangle): check the lithophane, acrylic, and panel fits, the LED gap with a real strip, and the kickstand angle. Tune LED gap / panel fit before adding UI.
+2. **Graded score density:** denser score lines far from the LEDs so a large panel lights evenly.
+3. **Keyhole slots** on the back panel for wall hanging (the kickstand already pulls out), and a **controller bay** for an ESP32 / USB-C LED controller.
+4. **Project save / load:** the kit already ships `settings.json`; re-import it and remember the last session in `localStorage`.
 
 ### Still a good idea
 
@@ -94,7 +123,8 @@ Shipped work is the new baseline. What follows is a **tentative** backlog: keep 
 ### Lower priority / later
 
 - Printable disconnected islands in counters (the lithophane already owns that fill).
-- Curvature-adaptive resampling if a large organic curve still looks coarse after a real print.
+- Curvature-adaptive resampling to cut triangle counts (an ogee on a pack import is 280k–400k triangles at the 0.12 mm ring spacing).
+- Replace the EDT disk offsets with Clipper2 offsets from manifold once they are proven on real prints.
 - User toggle for “force miter vs force organic” — classification is enough until it is not.
 
 ## Repository layout
@@ -107,14 +137,23 @@ src/geom/derived.ts       outer / pocket / glass sizes + validation
 src/geom/plan.ts          loops, simplify, polygon vs organic classify
 src/geom/miterSweep.ts    mitered sweep for rectangles and sharp polygons
 src/geom/offset.ts        EDT disk offset
-src/geom/offsetLoft.ts    organic loft from offset rings
+src/geom/offsetLoft.ts    organic loft from offset rings (+ forced rabbet rings)
+src/geom/segIndex.ts      grid index for nearest-edge / self-intersection queries
+src/geom/rings.ts         plan loop at any profile u (rabbet walls, acrylic, panel)
+src/geom/indexed.ts       welded meshes, inspection, creased normals
+src/geom/manifold.ts      manifold-3d loader, conversions, Clipper2 offset
+src/geom/scoreGrid.ts     acrylic score grid clipped to the image area
+src/geom/parts/           back panel, kickstand, turn-buttons, pilot holes (kit.ts)
+src/geom/bench.ts         build timings
 src/geom/maskTrace.ts     mask → sight polygon + holes
 src/geom/frame.ts         pick miter vs loft
 src/geom/rectFrame.ts     rectangle / hex / oct / circle → mesh
 src/geom/stl.ts           binary STL
 src/geom/validate.ts      watertight / bbox inspection
 src/geom/selfcheck.ts     geometry + import checks
-src/import/litholabPack.ts  zip / .litholab unpack + param map
+src/import/litholabPack.ts  zip / .litholab unpack + param map + pack rings
+src/export/               acrylic DXF, 3MF, kit ZIP + cut sheet
+src/worker/               geometry Web Worker, protocol, main-thread client
 src/preview/viewer.ts     Three.js orbit preview + artwork plane
 src/preview/artwork.ts    letter-body alpha composite (counters left clear)
 src/ui/                   sidebar params + section sketch

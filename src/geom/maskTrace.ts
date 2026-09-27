@@ -189,6 +189,42 @@ function isoEdgePoint(
   }
 }
 
+const BLOCK = 16
+const blockCache = new WeakMap<object, { nbx: number; min: Float64Array; max: Float64Array }>()
+
+/**
+ * Min / max of the corner values touched by each BLOCK×BLOCK run of cells
+ * (cells span −1…w−1, outside samples read as 1e6). Memoised per field, so a
+ * distance field reused for many iso levels pays for this once.
+ */
+function blockRanges(field: ArrayLike<number>, w: number, h: number): { nbx: number; min: Float64Array; max: Float64Array } {
+  const hit = blockCache.get(field as object)
+  if (hit) return hit
+  const nbx = Math.ceil((w + 1) / BLOCK)
+  const nby = Math.ceil((h + 1) / BLOCK)
+  const min = new Float64Array(nbx * nby).fill(Infinity)
+  const max = new Float64Array(nbx * nby).fill(-Infinity)
+  // Corner (x, y) with x in −1…w, y in −1…h feeds cells (x−1…x, y−1…y).
+  for (let y = -1; y <= h; y++) {
+    for (let x = -1; x <= w; x++) {
+      const v = x < 0 || y < 0 || x >= w || y >= h ? 1e6 : (field[y * w + x] ?? 1e6)
+      for (const cy of [y - 1, y]) {
+        if (cy < -1 || cy > h - 1) continue
+        const by = Math.floor((cy + 1) / BLOCK)
+        for (const cx of [x - 1, x]) {
+          if (cx < -1 || cx > w - 1) continue
+          const k = by * nbx + Math.floor((cx + 1) / BLOCK)
+          if (v < min[k]!) min[k] = v
+          if (v > max[k]!) max[k] = v
+        }
+      }
+    }
+  }
+  const out = { nbx, min, max }
+  blockCache.set(field as object, out)
+  return out
+}
+
 /**
  * Marching squares on a scalar field. Values ≤ `iso` are inside; crossings are
  * interpolated. Grid edges are keyed numerically so stitching avoids string churn.
@@ -213,24 +249,32 @@ export function extractPolygonsFromScalar(field: ArrayLike<number>, w: number, h
     return field[y * w + x] ?? 1e6
   }
 
+  // Visit only blocks whose corner range straddles `iso`, in the same row-major order as a full scan.
+  const blocks = blockRanges(field, w, h)
   for (let cy = -1; cy < h; cy++) {
-    for (let cx = -1; cx < w; cx++) {
-      const v00 = at(cx, cy)
-      const v10 = at(cx + 1, cy)
-      const v11 = at(cx + 1, cy + 1)
-      const v01 = at(cx, cy + 1)
-      const code =
-        (v00 <= iso ? 1 : 0) | (v10 <= iso ? 2 : 0) | (v11 <= iso ? 4 : 0) | (v01 <= iso ? 8 : 0)
-      if (code === 0 || code === 15) continue
-      for (const [a, b] of MS_TABLE[code]!) {
-        const pb = isoEdgePoint(cx, cy, b, v00, v10, v11, v01, iso)
-        const ka = edgeKey(cx, cy, a)
-        let list = next.get(ka)
-        if (!list) {
-          list = []
-          next.set(ka, list)
+    const brow = Math.floor((cy + 1) / BLOCK) * blocks.nbx
+    for (let bx = 0; bx < blocks.nbx; bx++) {
+      if (!(blocks.min[brow + bx]! <= iso && blocks.max[brow + bx]! > iso)) continue
+      const x0 = bx * BLOCK - 1
+      const x1 = Math.min(w - 1, x0 + BLOCK - 1)
+      for (let cx = x0; cx <= x1; cx++) {
+        const v00 = at(cx, cy)
+        const v10 = at(cx + 1, cy)
+        const v11 = at(cx + 1, cy + 1)
+        const v01 = at(cx, cy + 1)
+        const code =
+          (v00 <= iso ? 1 : 0) | (v10 <= iso ? 2 : 0) | (v11 <= iso ? 4 : 0) | (v01 <= iso ? 8 : 0)
+        if (code === 0 || code === 15) continue
+        for (const [a, b] of MS_TABLE[code]!) {
+          const pb = isoEdgePoint(cx, cy, b, v00, v10, v11, v01, iso)
+          const ka = edgeKey(cx, cy, a)
+          let list = next.get(ka)
+          if (!list) {
+            list = []
+            next.set(ka, list)
+          }
+          list.push({ to: pb, toKey: edgeKey(cx, cy, b) })
         }
-        list.push({ to: pb, toKey: edgeKey(cx, cy, b) })
       }
     }
   }
